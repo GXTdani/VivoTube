@@ -1,0 +1,17 @@
+build/
+build-*/
+tests/host/tmp_store/
+tools/__pycache__/
+*.vpk
+*.velf
+*.self
+# Your own Google OAuth client; never commit these.
+secrets.cmake
+google_client.json
+client_secret*.json
+# Captured YouTube responses and media segments: regenerate with `python -I tools/probe.py --save`.
+# They hold other people's content and the capturing machine's IP address, so they stay local.
+tests/fixtures/*
+!tests/fixtures/captions_synthetic.json
+!tests/fixtures/update_test.zip
+!tests/fixtures/update_unsafe.zip

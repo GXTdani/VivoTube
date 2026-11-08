@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "comment": "InnerTube client profiles. Copy to ux0:data/VivoTube/clients.json and edit to override without rebuilding.",
+  "roles": {
+    "player": "VISIONOS",
+    "search": "WEB",
+    "browse": "WEB",
+    "next": "WEB",
+    "visitor": "WEB"
+  },
+  "preferredVideoItags": [135, 134, 136, 133, 160],
+  "preferredAudioItags": [140, 139],
+  "clients": {
+    "WEB": {
+      "clientId": 1,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36,gzip(gfe)",
+      "context": {
+        "clientName": "WEB",
+        "clientVersion": "2.20260708.00.00",
+        "platform": "DESKTOP"
+      },
+      "headers": {}
+    },
+    "MWEB": {
+      "clientId": 2,
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1,gzip(gfe)",
+      "context": {
+        "clientName": "MWEB",
+        "clientVersion": "2.20260708.05.00",
+        "platform": "MOBILE"
+      },
+      "headers": {}
+    },
+    "VISIONOS": {
+      "clientId": 101,
+      "userAgent": "com.google.visionos.youtube/1.04(RealityDevice17,1; U; CPU visionOS 26_6_0 like Mac OS X; US)",
+      "context": {
+        "clientName": "VISIONOS",
+        "clientVersion": "1.04",
+        "deviceMake": "Apple",
+        "deviceModel": "RealityDevice17,1",
+        "osName": "visionOS",
+        "osVersion": "26.6.0.23O770"
+      },
+      "headers": {
+        "X-Goog-Api-Format-Version": "2"
+      }
+    }
+  }
+}

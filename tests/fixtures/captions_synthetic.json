@@ -1,0 +1,8 @@
+{"wireMagic":"pb3","pens":[{}],"events":[
+{"tStartMs":0,"dDurationMs":1000,"id":1,"wpWinPosId":1,"wsWinStyleId":1},
+{"tStartMs":500,"dDurationMs":2500,"wWinId":1,"segs":[{"utf8":"Synthetic caption line one"}]},
+{"tStartMs":2000,"dDurationMs":3000,"wWinId":1,"segs":[{"utf8":"line"},{"utf8":" two","tOffsetMs":300}]},
+{"tStartMs":2900,"wWinId":1,"aAppend":1,"segs":[{"utf8":"\n"}]},
+{"tStartMs":6000,"dDurationMs":1500,"segs":[{"utf8":"  "}]},
+{"tStartMs":8000,"dDurationMs":2000,"segs":[{"utf8":"third & last"}]}
+]}
