@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "../core/emoji.h"
 #include "../core/util.h"
 
 namespace vt {
@@ -147,6 +148,110 @@ struct FontEngine {
     }
 };
 
+// ---------------------------------------------------------------- emoji images
+
+// Twemoji images from assets/emoji/emoji.pak, decoded on demand into one RGBA atlas of padded
+// cells. Like the glyph atlas it is cleared and refilled when it runs out of room.
+struct EmojiAtlas {
+    static constexpr int kTex = 512, kCell = 34, kMax = kCell - 2, kCols = kTex / kCell;
+    static constexpr int kCells = kCols * kCols, kDecodesPerFrame = 40;
+    struct Slot {
+        int cell = -1, size = 0;  // cell -1: the image could not be decoded
+    };
+    EmojiPack pack;
+    vita2d_texture* tex = nullptr;
+    uint32_t* pix = nullptr;
+    unsigned stride = 0;  // in pixels
+    std::unordered_map<int, Slot> slots;
+    int next = 0, decoded = 0;
+    bool full = false;
+
+    bool init() {
+        std::string err;
+        if (!pack.open("app0:assets/emoji/emoji.pak", &err)) {
+            VT_LOG("emoji: %s", err.c_str());
+            return false;
+        }
+        tex = vita2d_create_empty_texture(kTex, kTex);
+        if (!tex) return false;
+        vita2d_texture_set_filters(tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+        pix = (uint32_t*)vita2d_texture_get_datap(tex);
+        stride = vita2d_texture_get_stride(tex) / 4;
+        memset(pix, 0, (size_t)stride * 4 * kTex);
+        VT_LOG("emoji: %u images", (unsigned)pack.size());
+        return true;
+    }
+
+    void shutdown() {
+        if (tex) {
+            vita2d_wait_rendering_done();
+            vita2d_free_texture(tex);
+        }
+        tex = nullptr;
+    }
+
+    void beginFrame() {
+        decoded = 0;
+        if (!full) return;
+        vita2d_wait_rendering_done();
+        memset(pix, 0, (size_t)stride * 4 * kTex);
+        slots.clear();
+        next = 0;
+        full = false;
+        VT_LOG("emoji: atlas recycled");
+    }
+
+    // The atlas cell holding pack entry `index`, decoding it if needed; nullptr when it can't be
+    // drawn this frame (out of room or over this frame's decode budget).
+    const Slot* get(int index) {
+        auto it = slots.find(index);
+        if (it != slots.end()) return it->second.cell >= 0 ? &it->second : nullptr;
+        if (full || decoded >= kDecodesPerFrame) return nullptr;
+        if (next >= kCells) {
+            full = true;
+            return nullptr;
+        }
+        decoded++;
+        Slot& sl = slots[index];
+        std::string data;
+        static uint32_t img[kMax * kMax];
+        // Decoded with vita2d's loader into a scratch texture (libpng's simplified reader
+        // crashed here), then copied into the atlas.
+        if (!pack.png(index, data) || data.size() < 8 || memcmp(data.data(), "\x89PNG", 4) != 0) return nullptr;
+        vita2d_texture* t = vita2d_load_PNG_buffer(data.data());
+        if (!t) return nullptr;
+        int w = (int)vita2d_texture_get_width(t), h = (int)vita2d_texture_get_height(t);
+        if (w != h || w > kMax || w < 4) {
+            vita2d_free_texture(t);
+            return nullptr;
+        }
+        const uint32_t* src = (const uint32_t*)vita2d_texture_get_datap(t);
+        unsigned srcStride = vita2d_texture_get_stride(t) / 4;
+        for (int y = 0; y < h; y++) memcpy(img + y * w, src + (size_t)y * srcStride, (size_t)w * 4);
+        vita2d_free_texture(t);  // never drawn, so it can go right away
+        // Give fully transparent pixels a neighbour's colour so filtering doesn't darken the edges.
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                uint32_t& p = img[y * w + x];
+                if (p >> 24) continue;
+                const int nx[4] = {x - 1, x + 1, x, x}, ny[4] = {y, y, y - 1, y + 1};
+                for (int k = 0; k < 4; k++) {
+                    if (nx[k] < 0 || ny[k] < 0 || nx[k] >= w || ny[k] >= h) continue;
+                    uint32_t q = img[ny[k] * w + nx[k]];
+                    if (q >> 24) {
+                        p = q & 0x00FFFFFFu;
+                        break;
+                    }
+                }
+            }
+        int cx = (next % kCols) * kCell + 1, cy = (next / kCols) * kCell + 1;
+        for (int y = 0; y < h; y++) memcpy(pix + (size_t)(cy + y) * stride + cx, img + y * w, (size_t)w * 4);
+        sl.cell = next++;
+        sl.size = w;
+        return &sl;
+    }
+};
+
 namespace {
 int px_for(float scale) {
     int px = (int)std::lround(scale * kPxPerScale);
@@ -164,6 +269,12 @@ bool Gfx::init() {
     }
     if (!font_ && !ft_) return false;
     if (ft_) {
+        emoji_ = new EmojiAtlas();
+        if (!emoji_->init()) {
+            emoji_->shutdown();
+            delete emoji_;
+            emoji_ = nullptr;
+        }
         lineH_ = (ft_->ascEm + ft_->descEm) * kPxPerScale;
         ascent_ = ft_->ascEm * kPxPerScale;
         VT_LOG("gfx: roboto, line height %.1f", lineH_);
@@ -178,6 +289,11 @@ bool Gfx::init() {
 }
 
 void Gfx::shutdown() {
+    if (emoji_) {
+        emoji_->shutdown();
+        delete emoji_;
+        emoji_ = nullptr;
+    }
     if (ft_) {
         ft_->shutdown();
         delete ft_;
@@ -189,13 +305,9 @@ void Gfx::shutdown() {
 
 void Gfx::beginFrame() {
     if (ft_) ft_->recycle();
+    if (emoji_) emoji_->beginFrame();
 }
 
-// Emoji, skin tones, variation selectors, tags and joiners: no font on the system can draw them.
-static bool is_emoji(uint32_t cp) {
-    return (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0000 && cp <= 0xE007F) ||
-           cp == 0x200D || cp == 0x20E3;
-}
 
 // Lays out one line. Draws it when `draw` is set; returns the advance width.
 float Gfx::measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color) {
@@ -232,15 +344,54 @@ float Gfx::measure(const std::string& s, float scale, int weight, bool draw, flo
         }
         fallback.clear();
     };
-    for (size_t i = 0; i < s.size(); i = utf8_next(s, i)) {
+    // Emoji: a little larger than the letters, centred on the middle of the capitals.
+    vita2d_texture_vertex* ev = nullptr;
+    size_t nev = 0;
+    const float es = std::round(px * 1.12f), eAdv = es + std::round(px * 0.12f);
+    const float eTop = std::round(baseline - px * 0.36f - es * 0.5f);
+    const float ei = 1.0f / EmojiAtlas::kTex;
+    for (size_t i = 0, next = 0; i < s.size(); i = next) {
+        next = utf8_next(s, i);
         uint32_t cp = utf8_decode(s, i);
         if (cp == '\n' || cp == '\r') continue;
         if (cp == '\t' || cp == 0xA0) cp = ' ';
-        if (is_emoji(cp)) continue;  // no font on the system has them (PGF draws "_")
+        if (emoji_ && cp >= '#') {
+            size_t end = 0;
+            bool textStyle = false;
+            int idx = emoji_->pack.match(s, i, &end, &textStyle);
+            // A plain symbol such as the copyright sign or the play triangle stays text.
+            if (idx >= 0 && !textStyle) {
+                flush();
+                if (draw) {
+                    const EmojiAtlas::Slot* sl = emoji_->get(idx);
+                    if (sl && !ev) {
+                        ev = (vita2d_texture_vertex*)vita2d_pool_memalign(
+                            (unsigned)((s.size() / 2 + 1) * 6 * sizeof(vita2d_texture_vertex)),
+                            sizeof(vita2d_texture_vertex));
+                    }
+                    if (sl && ev) {
+                        float gx = std::round(pen + (eAdv - es) * 0.5f), gy = eTop, x1 = gx + es, y1 = gy + es;
+                        int cx = (sl->cell % EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
+                        int cy = (sl->cell / EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
+                        float u0 = cx * ei, v0 = cy * ei, u1 = (cx + sl->size) * ei, v1 = (cy + sl->size) * ei;
+                        vita2d_texture_vertex q[6] = {{gx, gy, 0.5f, u0, v0}, {x1, gy, 0.5f, u1, v0},
+                                                      {gx, y1, 0.5f, u0, v1}, {gx, y1, 0.5f, u0, v1},
+                                                      {x1, gy, 0.5f, u1, v0}, {x1, y1, 0.5f, u1, v1}};
+                        memcpy(ev + nev, q, sizeof(q));
+                        nev += 6;
+                    }
+                }
+                pen += eAdv;
+                next = end;
+                continue;
+            }
+        }
+        // Joiners, selectors, tones and pictographs the pack lacks: no font here draws them.
+        if (is_emoji_component(cp) || is_pictograph(cp)) continue;
         const FontEngine::Glyph& g = ft_->get(w, px, cp);
         if (g.missing) {
             if (fallback.empty()) fallbackX = pen;
-            fallback += s.substr(i, utf8_next(s, i) - i);
+            fallback += s.substr(i, next - i);
             continue;
         }
         flush();
@@ -257,6 +408,10 @@ float Gfx::measure(const std::string& s, float scale, int weight, bool draw, flo
     }
     flush();
     if (draw && v && nv) vita2d_draw_array_textured(ft_->atlas, SCE_GXM_PRIMITIVE_TRIANGLES, v, nv, color);
+    if (draw && ev && nev) {
+        vita2d_draw_array_textured(emoji_->tex, SCE_GXM_PRIMITIVE_TRIANGLES, ev, nev,
+                                   with_alpha(0xFFFFFFFFu, (uint8_t)(color >> 24)));
+    }
     return pen - start;
 }
 

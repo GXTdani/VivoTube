@@ -153,7 +153,8 @@ bool InnerTube::ensureVisitor(std::string* err) {
     return true;
 }
 
-JDocPtr InnerTube::call(const std::string& role, const char* endpoint, const std::string& extraJson, std::string* err) {
+JDocPtr InnerTube::call(const std::string& role, const char* endpoint, const std::string& extraJson, std::string* err,
+                        const std::vector<std::string>& extraHeaders) {
     if (std::string(endpoint) != "visitor_id" && !ensureVisitor(err)) return nullptr;
     HttpRequest req;
     std::string visitor;
@@ -176,6 +177,7 @@ JDocPtr InnerTube::call(const std::string& role, const char* endpoint, const std
     req.headers.push_back("Content-Type: application/json");
     req.headers.push_back("Origin: https://www.youtube.com");
     if (!visitor.empty()) req.headers.push_back("X-Goog-Visitor-Id: " + visitor);
+    for (const std::string& h : extraHeaders) req.headers.push_back(h);
 
     double t0 = monotonic_seconds();
     HttpResponse res = http_request(req);
@@ -279,6 +281,23 @@ Page InnerTube::topicFeed(const std::string& channelId) {
     Page p;
     if (d) p = parse_browse_feed(*d);
     if (!err.empty()) p.error = err;
+    return p;
+}
+
+Page InnerTube::home(const std::string& bearer, const std::string& continuation, bool* personal) {
+    std::string err;
+    std::string extra = continuation.empty() ? std::string("{\"browseId\":\"FEwhat_to_watch\"}")
+                                             : "{\"continuation\":" + json_string(continuation) + "}";
+    std::vector<std::string> headers;
+    if (!bearer.empty()) headers.push_back("Authorization: Bearer " + bearer);
+    JDocPtr d = call("browse", "browse", extra, &err, headers);
+    Page p;
+    bool loggedOut = true;
+    if (d) p = parse_home_feed(*d, &loggedOut);
+    if (!err.empty()) p.error = err;
+    if (personal) *personal = d && !loggedOut && !p.items.empty();
+    VT_LOG("innertube: home %s, %u videos, %s", bearer.empty() ? "signed out" : "with token", (unsigned)p.items.size(),
+           loggedOut ? "not personalised" : "personalised");
     return p;
 }
 

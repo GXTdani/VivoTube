@@ -410,6 +410,17 @@ Page parse_browse_feed(const JVal& root) {
     return p;
 }
 
+Page parse_home_feed(const JVal& root, bool* loggedOut) {
+    Page p;
+    check_alerts(root, p.error);
+    collect_browse(root, p);
+    p.items.erase(std::remove_if(p.items.begin(), p.items.end(),
+                                 [](const Item& i) { return i.type != ItemType::Video || i.id.empty(); }),
+                  p.items.end());
+    if (loggedOut) *loggedOut = jbool(root, "responseContext.mainAppWebResponseContext.loggedOut", true);
+    return p;
+}
+
 static void split_codecs(const std::string& mime, std::string& base, std::string& codecs) {
     size_t semi = mime.find(';');
     base = trim(mime.substr(0, semi));

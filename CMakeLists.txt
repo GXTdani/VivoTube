@@ -15,8 +15,8 @@ set(VITA_APP_NAME "VivoTube")
 set(VITA_TITLEID "VIVO00001")
 # Keep these two in step: VITA_VERSION is the LiveArea's "XX.YY", VT_VERSION the release tag
 # (without the "v") that the auto-updater compares against GitHub's latest release.
-set(VITA_VERSION "01.10")
-set(VT_VERSION "1.1.0")
+set(VITA_VERSION "01.20")
+set(VT_VERSION "1.2.0")
 
 # Optional, not checked in: a Google OAuth client to build in (see secrets.cmake.example).
 set(VT_GOOGLE_CLIENT_ID "")
@@ -100,4 +100,6 @@ vita_create_vpk(VivoTube.vpk ${VITA_TITLEID} eboot.bin
   FILE assets/fonts/Roboto-Medium.ttf assets/fonts/Roboto-Medium.ttf
   FILE assets/fonts/Roboto-Bold.ttf assets/fonts/Roboto-Bold.ttf
   FILE assets/fonts/LICENSE-Roboto.txt assets/fonts/LICENSE-Roboto.txt
+  FILE assets/emoji/emoji.pak assets/emoji/emoji.pak
+  FILE assets/emoji/LICENSE-Twemoji.txt assets/emoji/LICENSE-Twemoji.txt
 )

@@ -66,6 +66,14 @@ public:
         vel_ = 0;
     }
     float scroll() const { return scroll_; }
+    // Pull-to-refresh: how far a finger has pulled the list down past its top, and whether a
+    // pull far enough to refresh was let go of this frame.
+    float pullDistance() const { return touchActive_ && scroll_ < 0 ? -scroll_ : 0; }
+    bool takePulled() {
+        bool p = pulled_;
+        pulled_ = false;
+        return p;
+    }
 
 private:
     float offsetOf(int i) const;
@@ -74,7 +82,7 @@ private:
     void ensureVisible(const Rect& r, bool snap);
     int indexAt(float y) const;
     float scroll_ = 0, vel_ = 0, target_ = -1;
-    bool touchActive_ = false;
+    bool touchActive_ = false, pulled_ = false;
 };
 
 // A grid of equal cells with an optional header that scrolls with the content.
@@ -107,6 +115,12 @@ public:
     }
     void scrollToTop() { target_ = 0; }
     float scroll() const { return scroll_; }
+    float pullDistance() const { return touchActive_ && scroll_ < 0 ? -scroll_ : 0; }  // see ListView
+    bool takePulled() {
+        bool p = pulled_;
+        pulled_ = false;
+        return p;
+    }
     bool nearEnd(int rowsLeft = 2) const { return count > 0 && sel / cols >= (count - 1) / cols - rowsLeft + 1; }
     bool scrolledNearEnd(const Rect& r) const { return count > 0 && scroll_ + r.h >= total() - r.h * 0.5f; }
     // Header taps: true if the tap landed in the header (coordinates relative to it are passed back).
@@ -120,8 +134,11 @@ private:
     void ensureVisible(const Rect& r, bool snap);
     int indexAt(const Rect& r, float x, float y) const;
     float scroll_ = 0, vel_ = 0, target_ = -1;
-    bool touchActive_ = false;
+    bool touchActive_ = false, pulled_ = false;
 };
+
+// Pull distance that triggers a refresh.
+constexpr float PULL_TO_REFRESH = 80;
 
 // ---------------------------------------------------------------- items
 
@@ -216,6 +233,14 @@ struct Feed {
         retry_ = false;
         return r;
     }
+    // True once after the feed was pulled down past its top and let go.
+    bool takeRefresh() {
+        bool a = grid.takePulled(), b = list.takePulled();
+        return a || b;
+    }
+    float pullDistance() const { return gridLike() ? grid.pullDistance() : list.pullDistance(); }
+    // Whether the feed is scrolled to its very top with the first item highlighted.
+    bool atVeryTop() const;
     bool wantsMore(const Rect& r) const;
     // The item under focus: a shelf card while the shelf is focused, else an item of `items`.
     const Item* selected() const {

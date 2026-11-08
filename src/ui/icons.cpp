@@ -244,6 +244,17 @@ void draw_icon(Icon icon, float cx, float cy, float size, uint32_t c, uint32_t b
             poly(p, {19.5f, 11, 19.5f, 16, 5.5f, 16}, T, c);
             poly(p, {8.5f, 13, 5.5f, 16, 8.5f, 19}, T, c);
             break;
+        case Icon::Refresh: {
+            // Most of a circle, open at the top right, with an arrowhead on its end.
+            float r = 7.5f;
+            for (int i = 0; i < 18; i++) {
+                float a0 = -0.6f + i * 0.27f, a1 = a0 + 0.27f;
+                poly(p, {12 + r * std::cos(a0), 12 + r * std::sin(a0), 12 + r * std::cos(a1), 12 + r * std::sin(a1)},
+                     T, c);
+            }
+            tri(p, 13.5f, 2.5f, 21, 3.5f, 19.5f, 10.5f, c);
+            break;
+        }
         case Icon::Plus:
             poly(p, {12, 4.5f, 12, 19.5f}, T, c);
             poly(p, {4.5f, 12, 19.5f, 12}, T, c);

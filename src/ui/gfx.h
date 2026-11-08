@@ -13,6 +13,7 @@ struct vita2d_texture;
 namespace vt {
 
 struct FontEngine;
+struct EmojiAtlas;
 
 constexpr int SCREEN_W = 960;
 constexpr int SCREEN_H = 544;
@@ -66,7 +67,7 @@ public:
     void beginFrame();
 
     // Text is positioned by the top of its line box. Roboto at 18 px per unit of scale, with the
-    // system font standing in for characters Roboto lacks (CJK, symbols).
+    // system font standing in for characters Roboto lacks (CJK, symbols) and Twemoji images for emoji.
     void text(float x, float y, uint32_t color, float scale, const std::string& s, int weight = W_REGULAR);
     // Medium weight (titles, buttons).
     void textBold(float x, float y, uint32_t color, float scale, const std::string& s) {
@@ -111,6 +112,7 @@ private:
     float measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color);
     vita2d_pgf* font_ = nullptr;
     FontEngine* ft_ = nullptr;
+    EmojiAtlas* emoji_ = nullptr;
     float lineH_ = 21, ascent_ = 16;
     std::unordered_map<std::string, std::vector<std::string>> wrapCache_;
 };

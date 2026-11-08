@@ -21,6 +21,9 @@ PlayerInfo parse_player(const JVal& root);
 WatchInfo parse_next(const JVal& root);           // first /next response or related continuation
 CommentsPage parse_comments(const JVal& root);    // /next with a comments continuation
 Page parse_browse_feed(const JVal& root);         // topic channels used on Home
+// The Home feed (browse FEwhat_to_watch or its continuation): videos and the continuation.
+// *loggedOut is YouTube's own flag for whether the reply was for a signed-out viewer.
+Page parse_home_feed(const JVal& root, bool* loggedOut);
 ReelSeed parse_reel_seed(const JVal& root);       // reel/reel_item_watch without a video
 Page parse_reel_sequence(const JVal& root);       // reel/reel_watch_sequence: Shorts as items
 

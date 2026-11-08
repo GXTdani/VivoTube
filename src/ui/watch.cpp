@@ -67,6 +67,61 @@ public:
 
     bool fullscreen() const override { return true; }
     bool isWatch() const override { return true; }
+    bool playsVideo() const override { return true; }
+
+    // ------------------------------------------------------------ mini player
+
+    bool canMinimize() const override {
+        return playError_.empty() && !(player_ && player_->state() == Player::State::Error);
+    }
+
+    void setMinimized(bool) override {
+        full_ = false;
+        countdown_ = false;
+        seekPending_ = false;
+        lastInteract_ = monotonic_seconds();
+    }
+
+    void tickMinimized() override {
+        double now = monotonic_seconds();
+        Player::State st = player_ ? player_->state() : Player::State::Loading;
+        if (player_ && (st == Player::State::Playing || st == Player::State::Buffering)) g_app->keepAwake();
+        tickProgress(now, st);
+        countdown_ = false;  // autoplay waits until the page is full size again
+    }
+
+    void togglePlay() override { togglePause(); }
+    std::string videoId() const override { return item_.id; }
+
+    void drawMini(const Rect& r, bool focused) override {
+        Rect v{r.x, r.y, r.w, MINI_VIDEO_H};
+        g_gfx.roundRect(r.x - 2, r.y - 1, r.w + 4, r.h + 4, 12, rgba(0, 0, 0, 120));  // shadow
+        g_gfx.roundRect(r.x, r.y, r.w, r.h, 10, col::menu);
+        g_gfx.rect(v.x, v.y + 6, v.w, v.h - 6, rgba(0, 0, 0));
+        g_gfx.roundRect(v.x, v.y, v.w, 16, 10, rgba(0, 0, 0));
+        Player::State st = player_ ? player_->state() : Player::State::Loading;
+        if (player_) {
+            player_->draw(v.x, v.y, v.w, v.h);
+        } else if (vita2d_texture* t = g_app->thumbs.get(item_.thumbUrl())) {
+            g_gfx.imageCover(t, v.x, v.y, v.w, v.h);
+        }
+        bool busy = st == Player::State::Loading || st == Player::State::Buffering || !infoLoaded_;
+        if (busy) g_gfx.spinner(v.x + v.w / 2, v.y + v.h / 2, 16, col::text);
+        double dur = shownDur(), pos = player_ ? player_->position() : 0;
+        float frac = dur > 0 ? (float)std::min(1.0, pos / dur) : 0;
+        g_gfx.rect(v.x, v.y + v.h - 3, v.w, 3, rgba(255, 255, 255, 60));
+        g_gfx.rect(v.x, v.y + v.h - 3, v.w * frac, 3, col::red);
+
+        float by = v.y + v.h, tx = r.x + 12, tw = MINI_PLAY_X - 22 - tx;
+        std::string title = item_.title.empty() ? "Loading..." : item_.title;
+        g_gfx.text(tx, by + 5, col::text, 0.62f, g_gfx.ellipsize(title, tw, 0.62f, W_MEDIUM), W_MEDIUM);
+        std::string sub = focused ? g_app->confirmGlyph() + " Expand   " G_SQUARE " Close   START Pause" : item_.channel;
+        g_gfx.text(tx, by + 25, col::text2, 0.54f, g_gfx.ellipsize(sub, tw, 0.54f));
+        bool playing = player_ && !player_->paused() && st != Player::State::Ended;
+        draw_icon(playing ? Icon::Pause : Icon::Play, MINI_PLAY_X, MINI_BTN_Y, 22, col::text, col::menu);
+        draw_icon(Icon::Close, MINI_CLOSE_X, MINI_BTN_Y, 20, col::text, col::menu);
+        if (focused) g_gfx.roundFrame(r.x - 4, r.y - 4, r.w + 8, r.h + 8, 14, 2.5f, col::focus);
+    }
 
     void onHide() override {
         if (player_) {
@@ -174,7 +229,7 @@ public:
 
 private:
     enum Focus { F_PLAYER, F_ACTIONS, F_DESC, F_CHIPS, F_PANEL };
-    enum ActionKind { A_SUB, A_LIKE, A_DISLIKE, A_SHARE, A_SAVE, A_MORE };
+    enum ActionKind { A_CHANNEL, A_SUB, A_LIKE, A_DISLIKE, A_SHARE, A_SAVE, A_MORE };
     struct Action {
         ActionKind kind;
         Rect r;
@@ -537,6 +592,7 @@ private:
     void runAction(ActionKind k) {
         int r = g_app->store.rating(item_.id);
         switch (k) {
+            case A_CHANNEL: g_app->openChannel(item_.channelId, item_.channel); break;  // keeps playing small
             case A_SUB: g_app->toggleSubscription(item_.channelId, item_.channel, channelAvatar()); break;
             case A_LIKE: g_app->rateVideo(item_, r == 1 ? 0 : 1); break;
             case A_DISLIKE: g_app->rateVideo(item_, r == -1 ? 0 : -1); break;
@@ -1120,23 +1176,34 @@ private:
         std::string subLabel = sub ? "Subscribed" : "Subscribe";
         float subW = pill_width(subLabel, false, kPillH);
 
-        draw_avatar(channelAvatar(), item_.channel, x + 18, rowY + rowH / 2, 18);
         float nx = x + 46;
         float nameMax = VIDEO.w - 12 - rightW - subW - 22 - nx;
         float isz = 11;
         std::string nm = g_gfx.ellipsize(item_.channel, nameMax - (item_.verified ? isz + 4 : 0), 0.72f, W_MEDIUM);
-        g_gfx.text(nx, rowY + 1, col::text, 0.72f, nm, W_MEDIUM);
-        float nameW = (float)g_gfx.width(nm, 0.72f, W_MEDIUM);
-        if (item_.verified) {
-            draw_icon(Icon::Verified, nx + nameW + 4 + isz / 2, rowY + 1 + g_gfx.lineHeight(0.72f) / 2, isz, col::text2);
-            nameW += isz + 4;
-        }
+        float nmW = (float)g_gfx.width(nm, 0.72f, W_MEDIUM);
         std::string subs = g_gfx.ellipsize(watch_.subscribers, nameMax, 0.56f);
-        if (!subs.empty()) g_gfx.text(nx, rowY + 22, col::text2, 0.56f, subs);
-        nameW = std::max(nameW, (float)g_gfx.width(subs, 0.56f));
-        float sx = nx + std::min(nameW, nameMax) + 16;
+        float nameW = std::max(nmW + (item_.verified ? isz + 4 : 0), (float)g_gfx.width(subs, 0.56f));
         bool act = focus_ == F_ACTIONS;
         int idx = 0;
+        uint32_t rowBg = col::bg;
+        if (!item_.channelId.empty()) {
+            Rect cr{x - 2, rowY - 2, nx - x + std::min(nameW, nameMax) + 12, rowH + 4};
+            if (act && actionSel_ == idx) {
+                rowBg = col::raisedHi;
+                g_gfx.roundRect(cr.x, cr.y, cr.w, cr.h, cr.h / 2, rowBg);
+                g_gfx.roundFrame(cr.x - 3, cr.y - 3, cr.w + 6, cr.h + 6, cr.h / 2 + 3, 2.5f, col::focus);
+            }
+            actions_.push_back({A_CHANNEL, cr});
+            idx++;
+        }
+        draw_avatar(channelAvatar(), item_.channel, x + 18, rowY + rowH / 2, 18, rowBg);
+        g_gfx.text(nx, rowY + 1, col::text, 0.72f, nm, W_MEDIUM);
+        if (item_.verified) {
+            draw_icon(Icon::Verified, nx + nmW + 4 + isz / 2, rowY + 1 + g_gfx.lineHeight(0.72f) / 2, isz, col::text2,
+                      rowBg);
+        }
+        if (!subs.empty()) g_gfx.text(nx, rowY + 22, col::text2, 0.56f, subs);
+        float sx = nx + std::min(nameW, nameMax) + 16;
         if (!item_.channelId.empty()) {
             draw_pill(sx, pillY, subLabel, sub ? PillStyle::Secondary : PillStyle::Primary, act && actionSel_ == idx, false,
                       Icon::Play, kPillH);

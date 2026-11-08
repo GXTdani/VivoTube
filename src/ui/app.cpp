@@ -52,6 +52,7 @@ bool App::init(const std::string& dir) {
 void App::applyLocale() { yt.setLocale(store.settings.hl, store.settings.gl); }
 
 void App::shutdown() {
+    mini_.reset();
     for (auto& st : stacks_) {
         for (auto it = st.rbegin(); it != st.rend(); ++it) (*it)->onHide();
         st.clear();
@@ -73,7 +74,11 @@ std::unique_ptr<Screen> App::makeRoot(int t) {
 Screen* App::top() { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
 
 void App::push(std::unique_ptr<Screen> s) {
-    if (Screen* t = top()) t->onHide();
+    if (s->playsVideo()) closeMini();
+    Screen* t = top();
+    // Leaving a video for another page keeps it playing in the mini player.
+    if (t && t->isWatch() && !s->playsVideo() && t->canMinimize()) minimizeTop(false);
+    else if (t) t->onHide();
     stacks_[tab_].push_back(std::move(s));
     zone_ = Zone::Content;
 }
@@ -81,6 +86,10 @@ void App::push(std::unique_ptr<Screen> s) {
 void App::pop() {
     auto& st = stacks_[tab_];
     if (st.size() <= 1) return;
+    if (st.back()->isWatch() && st.back()->canMinimize()) {
+        minimizeTop(true);
+        return;
+    }
     st.back()->onHide();
     graveyard_.push_back(std::move(st.back()));
     st.pop_back();
@@ -102,23 +111,60 @@ void App::replaceTop(std::unique_ptr<Screen> s) {
 void App::switchTab(int t) {
     zone_ = Zone::Content;
     if (t == tab_) {
-        // Re-selecting the current tab returns to its root.
+        // Re-selecting the current tab returns to its root; at the root it scrolls to the top,
+        // and at the top it refreshes, like the site's own tab bar.
         auto& st = stacks_[tab_];
         if (st.size() > 1) {
-            st.back()->onHide();
+            if (st.back()->isWatch() && st.back()->canMinimize()) minimizeTop(false);
+            if (st.size() > 1) st.back()->onHide();
             while (st.size() > 1) {
                 graveyard_.push_back(std::move(st.back()));
                 st.pop_back();
             }
             st.back()->onShow();
+        } else if (!st.empty() && !st.back()->scrollToTop()) {
+            st.back()->refresh();
         }
         return;
     }
-    if (Screen* cur = top()) cur->onHide();
+    if (Screen* cur = top()) {
+        if (cur->isWatch() && cur->canMinimize()) minimizeTop(false);
+        else cur->onHide();
+    }
     tab_ = t;
     railSel_ = t;
-    if (stacks_[t].empty()) stacks_[t].push_back(makeRoot(t));
-    else top()->onShow();
+    if (stacks_[t].empty()) {
+        if (t == TAB_SHORTS) closeMini();
+        stacks_[t].push_back(makeRoot(t));
+    } else {
+        if (top()->playsVideo()) closeMini();
+        top()->onShow();
+    }
+}
+
+void App::minimizeTop(bool showBelow) {
+    auto& st = stacks_[tab_];
+    if (st.size() <= 1 || !st.back()->isWatch()) return;
+    if (mini_) graveyard_.push_back(std::move(mini_));
+    mini_ = std::move(st.back());
+    st.pop_back();
+    mini_->setMinimized(true);
+    if (showBelow) st.back()->onShow();
+    zone_ = Zone::Content;
+}
+
+void App::expandMini() {
+    if (!mini_) return;
+    std::unique_ptr<Screen> w = std::move(mini_);
+    w->setMinimized(false);
+    if (Screen* t = top()) t->onHide();
+    stacks_[tab_].push_back(std::move(w));
+    zone_ = Zone::Content;
+}
+
+void App::closeMini() {
+    if (mini_) graveyard_.push_back(std::move(mini_));
+    if (zone_ == Zone::Mini) zone_ = Zone::Rail;
 }
 
 void App::openItem(const Item& it, const std::vector<Item>& queue, int queueIndex) {
@@ -138,6 +184,11 @@ void App::openVideo(const Item& it, const std::vector<Item>& queue, int queueInd
         toast("Live streams aren't supported yet");
         return;
     }
+    if (mini_ && mini_->videoId() == it.id) {
+        expandMini();
+        return;
+    }
+    closeMini();
     auto s = make_watch_screen(it, queue, queueIndex);
     Screen* t = top();
     if (t && t->isWatch()) replaceTop(std::move(s));
@@ -684,6 +735,14 @@ void App::moreMenu() {
 void App::handleShellTaps() {
     if (!input.tapped) return;
     float x = input.tapX, y = input.tapY;
+    if (mini_ && MINI_RECT.contains(x, y)) {
+        input.consumeTap();
+        bool inBar = y >= MINI_RECT.y + MINI_VIDEO_H;
+        if (inBar && std::fabs(x - MINI_CLOSE_X) < 19) closeMini();
+        else if (inBar && std::fabs(x - MINI_PLAY_X) < 19) mini_->togglePlay();
+        else expandMini();
+        return;
+    }
     if (y < TOPBAR_H) {
         input.consumeTap();
         zone_ = Zone::Content;
@@ -710,8 +769,30 @@ void App::updateShell(Screen* s) {
         openGuide();
         return;
     }
+    // START plays / pauses the mini player from anywhere.
+    if (mini_ && in.pressed(BTN_START) && !s->playsVideo()) {
+        in.consume(BTN_START);
+        mini_->togglePlay();
+    }
+    if (zone_ == Zone::Mini) {
+        if (!mini_) {
+            zone_ = Zone::Rail;
+        } else {
+            if (in.pressed(BTN_CONFIRM)) {
+                expandMini();
+            } else if (in.pressed(BTN_SQUARE)) {
+                closeMini();
+            } else if (in.pressed(BTN_UP) || in.pressed(BTN_LEFT) || in.pressed(BTN_CANCEL)) {
+                zone_ = Zone::Rail;
+                railSel_ = TAB_COUNT - 1;
+            }
+            in.consume(0xFFFFFFFF);
+            return;
+        }
+    }
     if (zone_ == Zone::Rail) {
         if (in.repeat(BTN_DOWN) && railSel_ + 1 < TAB_COUNT) railSel_++;
+        else if (in.pressed(BTN_DOWN) && mini_) zone_ = Zone::Mini;
         else if (in.repeat(BTN_UP)) {
             if (railSel_ > 0) railSel_--;
             else if (in.pressed(BTN_UP)) {
@@ -933,6 +1014,8 @@ void App::run() {
             }
         }
 
+        if (mini_) mini_->tickMinimized();
+
         g_gfx.beginFrame();
         vita2d_start_drawing();
         vita2d_clear_screen();
@@ -942,6 +1025,7 @@ void App::run() {
         if (!full) {
             drawTopBar();
             drawRail();
+            if (mini_) mini_->drawMini(MINI_RECT, zone_ == Zone::Mini && !guideOpen_ && !menu_.isOpen());
         }
         if (guideOpen_) drawGuide();
         menu_.draw();

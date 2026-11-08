@@ -153,6 +153,7 @@ int ListView::update(Input& in, const Rect& r) {
         }
         if (in.touchEnded) {
             touchActive_ = false;
+            if (scroll_ < -PULL_TO_REFRESH) pulled_ = true;
             if (in.tapped && r.contains(in.tapX, in.tapY)) {
                 int idx = indexAt(in.tapY - r.y + scroll_);
                 if (idx >= 0 && idx < count) {
@@ -306,6 +307,7 @@ int GridView::update(Input& in, const Rect& r) {
         }
         if (in.touchEnded) {
             touchActive_ = false;
+            if (scroll_ < -PULL_TO_REFRESH) pulled_ = true;
             if (in.tapped && r.contains(in.tapX, in.tapY)) {
                 int idx = indexAt(r, in.tapX, in.tapY);
                 if (idx >= 0) {
@@ -965,6 +967,21 @@ void Feed::draw(const Rect& r, const std::function<void(float y)>& header) {
         g_gfx.textCentered(r.x + r.w / 2, y + (30 - g_gfx.lineHeight(0.66f)) / 2, col::text, 0.66f,
                            g_gfx.ellipsize(error, w - 24, 0.66f));
     }
+    // Pull-to-refresh: a refresh button slides down with the finger and lights up once letting
+    // go would refresh.
+    float pull = pullDistance();
+    if (pull > 4) {
+        float t = std::min(1.0f, pull / PULL_TO_REFRESH);
+        float cx = r.x + r.w / 2, cy = r.y + std::min(pull, PULL_TO_REFRESH * 1.3f) * 0.5f;
+        uint8_t a = (uint8_t)(t * 255);
+        g_gfx.circle(cx, cy, 19, with_alpha(col::menu, a));
+        draw_icon(Icon::Refresh, cx, cy, 22, with_alpha(t >= 1 ? col::text : col::text3, a), col::menu);
+    }
+}
+
+bool Feed::atVeryTop() const {
+    if (gridLike()) return grid.scroll() <= 1 && grid.sel < grid.cols && !grid.bandSel;
+    return list.scroll() <= 1 && list.sel == 0 && !list.bandSel;
 }
 
 // ---------------------------------------------------------------- Menu

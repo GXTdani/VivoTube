@@ -72,9 +72,10 @@ public:
     Page playlistItems(const std::string& playlistId, const std::string& pageToken);
     Page likedVideos(const std::string& pageToken);
     bool addToPlaylist(const std::string& playlistId, const std::string& videoId, std::string* err);
+    // A current access token (refreshed when it has expired), for other Google APIs.
+    bool accessToken(std::string& token, std::string* err);
 
 private:
-    bool accessToken(std::string& token, std::string* err);
     // Calls https://www.googleapis.com/youtube/v3/<path>. Returns the parsed body (null on error).
     JDocPtr api(const std::string& method, const std::string& path, const std::string& body, std::string* err,
                 long* status = nullptr);

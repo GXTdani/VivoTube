@@ -7,6 +7,8 @@
 #include <string>
 
 #include "../../src/core/captions.h"
+#include "../../src/core/emoji.h"
+#include "../../src/core/foryou.h"
 #include "../../src/core/fmp4.h"
 #include "../../src/core/innertube.h"
 #include "../../src/core/json_util.h"
@@ -615,6 +617,123 @@ static void test_innertube_body() {
     CHECK(yt.videoItags().size() >= 3 && yt.videoItags()[0] == 135);
 }
 
+static void test_emoji() {
+    printf("emoji\n");
+    EmojiPack pack;
+    std::string err;
+    CHECK(pack.open("assets/emoji/emoji.pak", &err));
+    CHECK(pack.size() > 1500);
+    auto m = [&](const char* s, size_t* end, bool* ts = nullptr) { return pack.match(s, 0, end, ts); };
+    size_t e = 0;
+    bool ts = true;
+    CHECK(m("\xF0\x9F\x98\x80 hi", &e, &ts) >= 0 && e == 4 && !ts);         // grinning face
+    CHECK(m("a\xF0\x9F\x98\x80", &e) < 0);                                   // starts with a letter
+    CHECK(m("\xE2\x9D\xA4\xEF\xB8\x8F!", &e, &ts) >= 0 && e == 6 && !ts);   // red heart + VS16
+    CHECK(m("\xE2\x9D\xA4", &e, &ts) >= 0 && e == 3 && ts);                  // bare heart: text style
+    CHECK(m("\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD", &e) >= 0 && e == 8);         // thumbs up, medium tone
+    CHECK(m("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7", &e) >= 0 && e == 18);  // family
+    CHECK(m("\xF0\x9F\x87\xAF\xF0\x9F\x87\xB5", &e) >= 0 && e == 8);         // flag: Japan
+    CHECK(m("1\xEF\xB8\x8F\xE2\x83\xA3", &e) >= 0 && e == 7);                 // keycap 1
+    CHECK(m("1", &e) < 0);
+    CHECK(m("\xE2\x9C\xA8", &e, &ts) >= 0 && e == 3 && !ts);   // sparkles: emoji even without VS16
+    CHECK(m("\xE2\x96\xB6", &e, &ts) >= 0 && ts);              // play symbol: text
+    CHECK(m("\xF0\x9F\x91\xA9\xF0\x9F\x8F\xBD\xE2\x80\x8D\xF0\x9F\x92\xBB", &e) >= 0 && e == 15);  // technologist, toned
+    int a = m("\xF0\x9F\x98\x80\xF0\x9F\x98\x80", &e);
+    CHECK(a >= 0 && e == 4);
+    std::string png;
+    CHECK(pack.png(a, png) && png.size() > 8 && png.compare(1, 3, "PNG") == 0);
+    CHECK(pack.match("x \xF0\x9F\x94\xA5", 2, &e) >= 0 && e == 6);             // fire, mid-string
+    CHECK(is_emoji_component(0x200D) && is_emoji_component(0xFE0F) && is_emoji_component(0x1F3FB));
+    CHECK(!is_emoji_component('a'));
+}
+
+static Item fy_item(const std::string& id, const std::string& ch) {
+    Item it;
+    it.id = id;
+    it.title = "Video " + id;
+    it.channel = ch;
+    it.channelId = "UC" + ch;
+    return it;
+}
+
+static void test_for_you() {
+    printf("for you\n");
+    std::vector<HistoryEntry> hist;
+    for (int i = 0; i < 4; i++) {
+        HistoryEntry e;
+        e.item = fy_item("h" + std::to_string(i), "A");
+        e.length = 100;
+        e.position = i == 1 ? 95 : 10;  // h1 was watched to the end
+        hist.push_back(e);
+    }
+    hist[2].item.shorts = true;  // Shorts are not seeds
+    std::vector<Item> liked = {fy_item("l0", "B"), fy_item("h0", "A"), fy_item("l1", "B")};
+    size_t total = 0;
+    std::vector<Item> seeds = for_you_seeds(hist, liked, 0, 3, &total);
+    CHECK(total == 5);  // h0 l0 h1 l1 h3
+    CHECK(seeds.size() == 3 && seeds[0].id == "h0" && seeds[1].id == "l0" && seeds[2].id == "h1");
+    seeds = for_you_seeds(hist, liked, 1, 3);
+    CHECK(seeds.size() == 3 && seeds[0].id == "l1" && seeds[1].id == "h3" && seeds[2].id == "h0");  // wraps
+    CHECK(for_you_seeds({}, {}, 0, 6).empty());
+
+    std::unordered_set<std::string> ex = for_you_exclusions(hist, {"bad"});
+    CHECK(ex.count("h1") && ex.count("bad") && !ex.count("h0"));
+
+    ForYouMix m;
+    m.exclude = ex;
+    m.exclude.insert("h0");
+    // Seed 1's list is all one channel; seed 2's is varied and includes a finished video.
+    m.related.push_back({fy_item("x1", "X"), fy_item("x2", "X"), fy_item("x3", "X"), fy_item("h0", "A")});
+    m.related.push_back({fy_item("y1", "Y"), fy_item("h1", "A"), fy_item("z1", "Z"), fy_item("x1", "X"),
+                         fy_item("w1", "W")});
+    Item sh = fy_item("s9", "S");
+    sh.shorts = true;
+    m.related[1].push_back(sh);
+    m.subs = {fy_item("sub1", "S"), fy_item("sub2", "T")};
+    m.extra = {fy_item("e1", "E")};
+    std::vector<Item> out = blend_for_you(m, 50);
+    std::vector<std::string> ids;
+    for (auto& it : out) ids.push_back(it.id);
+    std::string joined;
+    for (auto& id : ids) joined += id + " ";
+    // Turns between the seeds, no repeats, a subscription upload in fifth place, then the rest.
+    CHECK(joined == "x1 y1 z1 x2 sub1 w1 x3 sub2 e1 ");
+    if (joined != "x1 y1 z1 x2 sub1 w1 x3 sub2 e1 ") printf("  got: %s\n", joined.c_str());
+    CHECK(m.exclude.count("x1") && m.exclude.count("sub2"));
+    // Nothing usable left: an empty page, not a loop.
+    CHECK(blend_for_you(m, 50).empty());
+    // The limit holds.
+    ForYouMix m2;
+    for (int i = 0; i < 30; i++) m2.extra.push_back(fy_item("v" + std::to_string(i), "C" + std::to_string(i)));
+    CHECK(blend_for_you(m2, 10).size() == 10);
+
+    // Home feed parsing keeps the continuation and reads YouTube's signed-out flag.
+    const char* home =
+        "{\"responseContext\":{\"mainAppWebResponseContext\":{\"loggedOut\":false}},"
+        "\"contents\":{\"twoColumnBrowseResultsRenderer\":{\"tabs\":[{\"tabRenderer\":{\"content\":"
+        "{\"richGridRenderer\":{\"contents\":[{\"richItemRenderer\":{\"content\":{\"videoRenderer\":"
+        "{\"videoId\":\"abcdefghijk\",\"title\":{\"runs\":[{\"text\":\"Hello\"}]},"
+        "\"lengthText\":{\"simpleText\":\"3:21\"}}}}},"
+        "{\"continuationItemRenderer\":{\"continuationEndpoint\":{\"continuationCommand\":{\"token\":\"NEXT\"}}}}"
+        "]}}}}]}}}";
+    std::string err;
+    JDocPtr d = jparse(home, &err);
+    CHECK(d != nullptr);
+    if (d) {
+        bool loggedOut = true;
+        Page hp = parse_home_feed(*d, &loggedOut);
+        CHECK(!loggedOut);
+        CHECK(hp.items.size() == 1 && hp.items[0].id == "abcdefghijk" && hp.items[0].title == "Hello");
+        CHECK(hp.continuation == "NEXT");
+    }
+    JDocPtr out2 = jparse("{\"responseContext\":{}}", &err);
+    if (out2) {
+        bool loggedOut = false;
+        parse_home_feed(*out2, &loggedOut);
+        CHECK(loggedOut);  // no flag: treated as signed out
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc > 1) g_dir = argv[1];
     test_util();
@@ -627,6 +746,8 @@ int main(int argc, char** argv) {
     test_update();
     test_google();
     test_search_params();
+    test_emoji();
+    test_for_you();
     test_browse();
     test_fmp4();
     test_captions();

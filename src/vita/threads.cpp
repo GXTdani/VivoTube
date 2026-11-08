@@ -46,6 +46,7 @@ void JobPool::stop() {
         std::lock_guard<std::mutex> lock(mutex_);
         quit_ = true;
         queue_.clear();
+        background_.clear();
     }
     cv_.notify_all();
     for (Thread* t : threads_) {
@@ -55,11 +56,11 @@ void JobPool::stop() {
     threads_.clear();
 }
 
-void JobPool::post(std::function<void()> work, std::function<void()> done) {
+void JobPool::post(std::function<void()> work, std::function<void()> done, bool background) {
     pending_++;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        queue_.push_back(Job{std::move(work), std::move(done)});
+        (background ? background_ : queue_).push_back(Job{std::move(work), std::move(done)});
     }
     cv_.notify_one();
 }
@@ -79,10 +80,11 @@ void JobPool::workerLoop() {
         Job job;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [&] { return quit_ || !queue_.empty(); });
+            cv_.wait(lock, [&] { return quit_ || !queue_.empty() || !background_.empty(); });
             if (quit_) return;
-            job = std::move(queue_.front());
-            queue_.pop_front();
+            std::deque<Job>& q = queue_.empty() ? background_ : queue_;
+            job = std::move(q.front());
+            q.pop_front();
         }
         if (job.work) job.work();
         pending_--;

@@ -28,6 +28,13 @@ constexpr float TOPBAR_H = 52;
 constexpr float RAIL_W = 72;
 // Content area below the top bar and right of the guide rail.
 constexpr Rect CONTENT{RAIL_W, TOPBAR_H, SCREEN_W - RAIL_W, SCREEN_H - TOPBAR_H};
+// Mini player card in the bottom-right corner: the video, then a bar with title and buttons.
+constexpr float MINI_W = 304, MINI_VIDEO_H = 171, MINI_BAR_H = 48;
+constexpr Rect MINI_RECT{SCREEN_W - 12 - MINI_W, SCREEN_H - 12 - MINI_VIDEO_H - MINI_BAR_H, MINI_W,
+                         MINI_VIDEO_H + MINI_BAR_H};
+// Centres of the mini player's play/pause and close buttons.
+constexpr float MINI_BTN_Y = MINI_RECT.y + MINI_VIDEO_H + MINI_BAR_H / 2;
+constexpr float MINI_CLOSE_X = MINI_RECT.x + MINI_W - 22, MINI_PLAY_X = MINI_CLOSE_X - 38;
 
 enum Tab { TAB_HOME = 0, TAB_SHORTS = 1, TAB_SUBS = 2, TAB_YOU = 3, TAB_COUNT = 4 };
 
@@ -47,12 +54,29 @@ public:
     virtual std::string searchQuery() const { return ""; }
     // The search page replaces itself with results instead of stacking under them.
     virtual bool isSearchPage() const { return false; }
+    // The tab of this (root) screen was picked again: scroll back to the top and return true, or
+    // return false when already there, and the app calls refresh().
+    virtual bool scrollToTop() { return false; }
+    // Reloads the page (pull-to-refresh, or picking the tab again at the top).
+    virtual void refresh() {}
+    // Screens with a video player of their own (watch page, Shorts): opening one closes the
+    // mini player.
+    virtual bool playsVideo() const { return false; }
+
+    // Mini player (watch page): whether leaving may shrink it into the corner instead of closing
+    // it, and the hooks the app uses while it is small.
+    virtual bool canMinimize() const { return false; }
+    virtual void setMinimized(bool) {}
+    virtual void tickMinimized() {}  // every frame while small (playback, history)
+    virtual void drawMini(const Rect&, bool /*focused*/) {}
+    virtual void togglePlay() {}
+    virtual std::string videoId() const { return ""; }
 
 protected:
     // Runs work() on a worker thread, then done(result) on the main thread, unless this
-    // screen has been closed in the meantime.
+    // screen has been closed in the meantime. Background work waits for other queued work.
     template <class T, class W, class D>
-    void async(W work, D done);
+    void async(W work, D done, bool background = false);
     // Wraps a callback so it does nothing once this screen is gone.
     template <class F>
     auto guarded(F f) {
@@ -132,6 +156,12 @@ public:
     // Keeps the system from dimming the screen or suspending (call every frame while playing).
     void keepAwake() { awake_ = true; }
     bool contentFocused() const { return zone_ == Zone::Content && !guideOpen_; }
+    // Mini player: shrink the watch page on top of the current tab into it, bring it back
+    // full size, or close it.
+    void minimizeTop(bool showBelow);
+    void expandMini();
+    void closeMini();
+    bool hasMini() const { return mini_ != nullptr; }
     void focusContent() { zone_ = Zone::Content; }
 
     // Text helpers that depend on the system button layout.
@@ -155,7 +185,7 @@ public:
     uint32_t accountGen = 0;
 
 private:
-    enum class Zone { Content, TopBar, Rail };
+    enum class Zone { Content, TopBar, Rail, Mini };
     enum TopItem { TOP_BACK, TOP_GUIDE, TOP_SEARCH, TOP_MORE, TOP_ACCOUNT };
 
     void updateShell(Screen* s);
@@ -174,6 +204,7 @@ private:
 
     std::vector<std::unique_ptr<Screen>> stacks_[TAB_COUNT];
     std::vector<std::unique_ptr<Screen>> graveyard_;  // destroyed after the frame
+    std::unique_ptr<Screen> mini_;                     // the minimized watch page
     int tab_ = 0;
     Zone zone_ = Zone::Content;
     int railSel_ = 0;
@@ -206,13 +237,14 @@ private:
 extern App* g_app;
 
 template <class T, class W, class D>
-void Screen::async(W work, D done) {
+void Screen::async(W work, D done, bool background) {
     auto result = std::make_shared<T>();
     std::weak_ptr<bool> alive = alive_;
     g_app->jobs.post([result, work]() mutable { *result = work(); },
                      [result, alive, done]() mutable {
                          if (alive.lock()) done(*result);
-                     });
+                     },
+                     background);
 }
 
 inline bool Screen::active() { return g_app->contentFocused(); }

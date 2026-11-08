@@ -25,5 +25,8 @@ SOFTWARE.
 Third-party components distributed with VivoTube keep their own licenses:
 
 - Roboto fonts (assets/fonts/): Apache License 2.0, see assets/fonts/LICENSE-Roboto.txt
+- Twemoji graphics (assets/emoji/emoji.pak): Copyright Twitter, Inc and other contributors,
+  Creative Commons Attribution 4.0 (CC-BY 4.0), see assets/emoji/LICENSE-Twemoji.txt.
+  https://github.com/jdecked/twemoji. Resized to 32x32 and palette-reduced for VivoTube.
 - RapidJSON (third_party/rapidjson/): MIT License, see its license file
 - Mozilla CA certificate bundle (assets/cacert.pem): Mozilla Public License 2.0

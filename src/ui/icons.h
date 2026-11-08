@@ -54,6 +54,7 @@ enum class Icon {
     Verified,
     Liked,
     ChevronDown,
+    Refresh,
 };
 
 // Draws an icon centered at (cx, cy), `size` pixels square. `bg` fills cut-outs in filled icons.

@@ -37,8 +37,9 @@ public:
     void start(int threads, size_t stackBytes = 512 * 1024);
     void stop();
 
-    // work runs on a worker; done (optional) runs on the main thread inside poll().
-    void post(std::function<void()> work, std::function<void()> done = nullptr);
+    // work runs on a worker; done (optional) runs on the main thread inside poll(). Background
+    // jobs (bulk fetches like every subscription's feed) wait while other jobs are queued.
+    void post(std::function<void()> work, std::function<void()> done = nullptr, bool background = false);
     // Main thread: runs finished callbacks. Returns how many ran.
     int poll();
     int pending() const { return pending_.load(); }
@@ -51,7 +52,7 @@ private:
     std::vector<Thread*> threads_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<Job> queue_;
+    std::deque<Job> queue_, background_;
     std::mutex doneMutex_;
     std::vector<std::function<void()>> done_;
     std::atomic<int> pending_{0};

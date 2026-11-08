@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <memory>
 #include <set>
+#include <unordered_set>
 
+#include "../core/foryou.h"
 #include "../core/util.h"
 #include "app.h"
 
@@ -26,6 +29,26 @@ std::string subs_key() {
 }
 
 uint32_t g_shuffleSeed = 0x9E3779B9u;
+
+// Whether YouTube personalises its Home feed for the account's token: -1 not tried yet this
+// session, 0 no (VivoTube builds "For you" itself), 1 yes.
+int g_youtubeHome = -1;
+
+struct HomeFetch {
+    Page page;
+    bool personal = false;
+};
+
+HomeFetch youtube_home(const std::string& continuation) {
+    HomeFetch r;
+    std::string token, err;
+    if (!g_app->account.accessToken(token, &err)) {
+        r.page.error = err;
+        return r;
+    }
+    r.page = g_app->yt.home(token, continuation, &r.personal);
+    return r;
+}
 
 std::vector<Item> shuffled(std::vector<Item> v) {
     g_shuffleSeed ^= (uint32_t)(monotonic_seconds() * 1000.0);
@@ -60,7 +83,7 @@ protected:
                     keep.push_back(std::move(it));
                 }
                 each(keep, r.err.empty());
-            });
+            }, true);
         }
     }
 
@@ -97,7 +120,34 @@ public:
         loadAll();
     }
 
+    bool scrollToTop() override {
+        Feed& f = feeds_[cur_];
+        if (f.atVeryTop()) return false;
+        chipsFocus_ = false;
+        f.scrollToTop();
+        return true;
+    }
+
+    void refresh() override {
+        chipsFocus_ = false;
+        if (cur_ == 0) {
+            fyRot_++;
+            loadAll(true);
+        } else if (def(cur_).kind == K_RECENT) {
+            loadSubs();
+        } else {
+            loadChip(cur_);
+        }
+    }
+
     void update(Input& in) override {
+        if (g_app->accountGen != accountGen_) {
+            // Signed in or out: the personal parts of Home change.
+            likedLoaded_ = false;
+            accountLiked_.clear();
+            g_youtubeHome = -1;
+            loadAll(true);
+        }
         refreshAllState();
 
         // Chips: tap, shoulder buttons, or d-pad when focused.
@@ -141,7 +191,9 @@ public:
             else if (def(cur_).kind == K_RECENT) loadSubs();
             else loadChip(cur_);
         }
+        if (f.takeRefresh()) refresh();
         if (def(cur_).kind == K_SEARCH && f.wantsMore(grid())) loadChip(cur_, true);
+        if (cur_ == 0 && mode_ != Mode::Mix && !personalBusy_ && f.wantsMore(grid())) loadMorePersonal();
         if (!chipsFocus_ && in.pressed(BTN_SQUARE) && f.selected()) g_app->itemMenu(*f.selected());
     }
 
@@ -196,10 +248,167 @@ private:
 
     void loadAll(bool force = false) {
         feeds_[0].reset();
+        accountGen_ = g_app->accountGen;
+        // Decide first whether "All" is personal, so the mixed feed doesn't flash up meanwhile.
+        mode_ = g_app->account.signedIn() || hasSeeds() ? Mode::ForYou : Mode::Mix;
         for (int i = 0; i < kChips; i++)
             if (def(i).kind == K_TOPIC && (force || (feeds_[i].items.empty() && !feeds_[i].loading))) loadChip(i);
         loadSubs();
         loadShorts();
+        if (mode_ != Mode::Mix) loadPersonal();
+    }
+
+    // ---- personal "All" feed
+
+    std::vector<Item> likedForSeeds() const {
+        std::vector<Item> v = accountLiked_;
+        v.insert(v.end(), g_app->store.liked.begin(), g_app->store.liked.end());
+        return v;
+    }
+    bool hasSeeds() const {
+        size_t total = 0;
+        for_you_seeds(g_app->store.history, likedForSeeds(), 0, 1, &total);
+        return total > 0;
+    }
+
+    void loadPersonal() {
+        uint32_t gen = feeds_[0].gen;
+        fyPage_ = 0;
+        fySecond_ = 0;
+        fyEmpty_ = 0;
+        fySeeds_.clear();
+        personalBusy_ = true;
+        if (g_app->account.signedIn() && g_youtubeHome != 0) {
+            // YouTube's own recommendations, if it accepts the token (tried once per session).
+            mode_ = Mode::YouTube;
+            async<HomeFetch>([] { return youtube_home(""); }, [this, gen](HomeFetch& r) {
+                if (gen != feeds_[0].gen) return;
+                if (r.personal) {
+                    g_youtubeHome = 1;
+                    personalBusy_ = false;
+                    feeds_[0].append(r.page);
+                    return;
+                }
+                if (!starts_with(r.page.error, "network error")) g_youtubeHome = 0;
+                startForYou(gen);
+            });
+            return;
+        }
+        startForYou(gen);
+    }
+
+    void startForYou(uint32_t gen) {
+        mode_ = Mode::ForYou;
+        personalBusy_ = true;
+        if (g_app->account.signedIn() && !likedLoaded_) {
+            async<Page>([] { return g_app->account.likedVideos(""); }, [this, gen](Page& p) {
+                likedLoaded_ = true;  // also on failure: the local likes still count
+                accountLiked_ = p.items;
+                if (gen == feeds_[0].gen) startForYou(gen);
+            });
+            return;
+        }
+        if (!hasSeeds()) {
+            // Nothing to go on yet: the mixed feed of subscriptions and topics.
+            mode_ = Mode::Mix;
+            personalBusy_ = false;
+            rebuildAll();
+            return;
+        }
+        loadForYouPage(gen);
+    }
+
+    // One page: the related videos of the next few seeds, blended.
+    void loadForYouPage(uint32_t gen) {
+        constexpr size_t kPer = 6;
+        Feed& f = feeds_[0];
+        std::vector<Item> liked = likedForSeeds();
+        size_t total = 0;
+        for_you_seeds(g_app->store.history, liked, 0, kPer, &total);
+        size_t seedPages = (total + kPer - 1) / kPer;
+        std::vector<Item> seeds;
+        if ((size_t)fyPage_ < seedPages) {
+            seeds = for_you_seeds(g_app->store.history, liked, (size_t)(fyPage_ + fyRot_), kPer);
+            seeds.erase(std::remove_if(seeds.begin(), seeds.end(), [&](const Item& it) { return fySeeds_.count(it.id); }),
+                        seeds.end());
+        }
+        if (seeds.empty()) {
+            // Past the viewer's own history: carry on from videos the feed already showed.
+            for (; fySecond_ < f.items.size() && seeds.size() < kPer; fySecond_++)
+                if (!fySeeds_.count(f.items[fySecond_].id)) seeds.push_back(f.items[fySecond_]);
+        }
+        fyPage_++;
+        if (seeds.empty()) {
+            personalBusy_ = false;
+            f.continuation.clear();
+            if (f.items.empty()) {  // no recommendations at all: fall back to the mixed feed
+                mode_ = Mode::Mix;
+                rebuildAll();
+            }
+            return;
+        }
+        for (const Item& it : seeds) fySeeds_.insert(it.id);
+        personalBusy_ = true;
+        auto related = std::make_shared<std::vector<std::vector<Item>>>(seeds.size());
+        auto left = std::make_shared<size_t>(seeds.size());
+        for (size_t i = 0; i < seeds.size(); i++) {
+            std::string id = seeds[i].id;
+            async<WatchInfo>([id] { return g_app->yt.next(id); }, [this, gen, related, left, i](WatchInfo& w) {
+                (*related)[i] = std::move(w.related);
+                if (--*left > 0 || gen != feeds_[0].gen) return;
+                finishForYouPage(*related);
+            });
+        }
+    }
+
+    void finishForYouPage(std::vector<std::vector<Item>>& related) {
+        Feed& f = feeds_[0];
+        personalBusy_ = false;
+        ForYouMix m;
+        m.related = std::move(related);
+        if (fyRot_ > 0)  // a refresh: a different order than last time
+            for (auto& v : m.related) v = shuffled(std::move(v));
+        m.exclude = for_you_exclusions(g_app->store.history, g_app->store.disliked);
+        for (const std::string& id : fySeeds_) m.exclude.insert(id);
+        for (const Item& it : f.items) m.exclude.insert(it.id);
+        m.subs = subsItems_;
+        for (int i = 0; i < kChips; i++)
+            if (def(i).kind == K_TOPIC) m.extra.insert(m.extra.end(), feeds_[i].items.begin(), feeds_[i].items.end());
+        std::vector<Item> page = blend_for_you(m, 36);
+        std::string selId = f.selected() ? f.selected()->id : "";
+        f.items.insert(f.items.end(), page.begin(), page.end());
+        f.list.count = f.grid.count = (int)f.items.size();
+        reselect(f, selId);
+        fyEmpty_ = page.empty() ? fyEmpty_ + 1 : 0;
+        f.continuation = fyEmpty_ >= 2 ? "" : "for-you";  // keeps infinite scroll going
+        if (f.items.empty()) {
+            if (fyEmpty_ < 2) {
+                loadForYouPage(f.gen);
+            } else {
+                f.error = "Couldn't load your recommendations. Check your connection and try again.";
+            }
+        }
+    }
+
+    void loadMorePersonal() {
+        Feed& f = feeds_[0];
+        uint32_t gen = f.gen;
+        if (mode_ == Mode::ForYou) {
+            loadForYouPage(gen);
+            return;
+        }
+        std::string cont = f.continuation;
+        personalBusy_ = true;
+        async<HomeFetch>([cont] { return youtube_home(cont); }, [this, gen](HomeFetch& r) {
+            Feed& fi = feeds_[0];
+            if (gen != fi.gen) return;
+            personalBusy_ = false;
+            if (!r.page.error.empty()) {
+                fi.continuation.clear();
+                return;
+            }
+            fi.append(r.page);
+        });
     }
 
     // The Shorts shelf on "All": popular Shorts from the Shorts search filter.
@@ -264,6 +473,10 @@ private:
     // "All" mixes the newest uploads from subscriptions with the topic feeds: two from
     // subscriptions, then one from the next topic, and so on.
     void rebuildAll() {
+        if (mode_ != Mode::Mix) {
+            rebuildRecent();
+            return;
+        }
         Feed& f = feeds_[0];
         std::string selId = f.selected() ? f.selected()->id : "";
         std::vector<int> topics;
@@ -295,7 +508,11 @@ private:
         f.items = std::move(out);
         f.list.count = f.grid.count = (int)f.items.size();
         reselect(f, selId);
-        // "Recently uploaded": subscriptions only, newest first.
+        rebuildRecent();
+    }
+
+    // "Recently uploaded": subscriptions only, newest first.
+    void rebuildRecent() {
         Feed& r = feeds_[kRecent];
         std::string rsel = r.selected() ? r.selected()->id : "";
         r.items = subsItems_;
@@ -305,6 +522,12 @@ private:
 
     void refreshAllState() {
         Feed& a = feeds_[0];
+        Feed& r = feeds_[kRecent];
+        r.loading = subsPending_ > 0 && r.items.empty();
+        if (mode_ != Mode::Mix) {
+            a.loading = personalBusy_;
+            return;
+        }
         bool busy = subsPending_ > 0;
         bool failed = subsFailed_ > 0;
         for (int i = 0; i < kChips; i++)
@@ -315,8 +538,6 @@ private:
         a.loading = busy;
         if (!busy && a.items.empty()) a.error = failed ? "Couldn't load videos. Check your connection and try again." : "";
         else a.error.clear();
-        Feed& r = feeds_[kRecent];
-        r.loading = subsPending_ > 0 && r.items.empty();
     }
 
     Feed feeds_[kChips];
@@ -327,6 +548,18 @@ private:
     uint32_t subsGen_ = 0;
     int subsPending_ = 0, subsFailed_ = 0;
     std::string loadedSubs_;
+
+    // What "All" shows: the mix of subscriptions and topics (nothing personal to go on), YouTube's
+    // own recommendations for the account, or VivoTube's "For you" built from history and likes.
+    enum class Mode { Mix, YouTube, ForYou };
+    Mode mode_ = Mode::Mix;
+    bool personalBusy_ = false;
+    int fyPage_ = 0, fyRot_ = 0, fyEmpty_ = 0;
+    size_t fySecond_ = 0;
+    std::unordered_set<std::string> fySeeds_;  // videos already used as seeds
+    std::vector<Item> accountLiked_;
+    bool likedLoaded_ = false;
+    uint32_t accountGen_ = 0;
 };
 
 // ================================================================ Search page
@@ -488,7 +721,7 @@ public:
         }
         if (!chipsFocus_ && in.pressed(BTN_SQUARE) && results_.selected()) g_app->itemMenu(*results_.selected());
         if (results_.wantsMore(list())) more();
-        if (results_.takeRetry()) run();
+        if (results_.takeRetry() || results_.takeRefresh()) run();
     }
 
     void draw() override {
@@ -674,6 +907,17 @@ public:
         if (subs_key() != loadedSubs_) load();
     }
 
+    bool scrollToTop() override {
+        if (feed_.atVeryTop() && feed_.grid.scroll() <= 1) return false;
+        stripFocus_ = false;
+        feed_.scrollToTop();
+        return true;
+    }
+    void refresh() override {
+        stripFocus_ = false;
+        load();
+    }
+
     void update(Input& in) override {
         auto& subs = g_app->store.subs;
         if (subs.empty()) {
@@ -730,7 +974,7 @@ public:
             feed_.grid.scrollToTop();
         }
         if (!stripFocus_ && in.pressed(BTN_SQUARE) && feed_.selected()) g_app->itemMenu(*feed_.selected());
-        if (feed_.takeRetry()) load();
+        if (feed_.takeRetry() || feed_.takeRefresh()) load();
     }
 
     void draw() override {
@@ -1317,7 +1561,7 @@ public:
         }
         if (btnFocus_ < 0 && in.pressed(BTN_SQUARE) && feed_.selected()) itemOptions(*feed_.selected());
         else if (btnFocus_ >= 0 && in.pressed(BTN_SQUARE)) pageOptions();
-        if (feed_.takeRetry()) reload();
+        if (feed_.takeRetry() || feed_.takeRefresh()) reload();
         if (feed_.wantsMore(list())) loadMore();
     }
 
@@ -1683,7 +1927,7 @@ public:
             btnFocus_ = true;
         }
         if (!btnFocus_ && in.pressed(BTN_SQUARE) && feed_.selected()) options(*feed_.selected());
-        if (feed_.takeRetry()) reload();
+        if (feed_.takeRetry() || feed_.takeRefresh()) reload();
     }
 
     void draw() override {
@@ -1989,7 +2233,11 @@ private:
                                               G_SQUARE "  More options for the highlighted video",
                                               "L / R  Switch chips and tabs, seek 10 s while watching",
                                               "SELECT  Guide (menu); fullscreen while watching",
-                                              "START  Play / pause while watching"},
+                                              "START  Play / pause the video or the mini player",
+                                              b + " while watching  Keep playing in the mini player",
+                                              "Mini player  Down from the last tab; " + c + " expand, " G_SQUARE " close",
+                                              "Tab again  Scroll to the top, then refresh",
+                                              "Pull down a feed  Refresh"},
                                              [](int) {});
                          }});
         rows_.push_back({Row::Info, "", "VivoTube " VT_VERSION,
@@ -2077,7 +2325,7 @@ public:
             g.grid.scrollToTop();
         }
         if (g.wantsMore(grid())) load(cur_, true);
-        if (g.takeRetry()) load(cur_);
+        if (g.takeRetry() || g.takeRefresh()) load(cur_);
         if (focus_ == F_GRID && in.pressed(BTN_SQUARE) && g.selected()) g_app->itemMenu(*g.selected());
     }
 

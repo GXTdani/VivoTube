@@ -9,7 +9,14 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 ## Features
 
 - **Home** with topic chips (All, Music, News, Sports, Gaming, Podcasts, Recently uploaded), a
-  Shorts shelf, and the latest uploads from your subscriptions
+  Shorts shelf, and the latest uploads from your subscriptions. Once you've watched or liked
+  something, "All" becomes a personal **For you** feed (see below) that keeps loading as you
+  scroll
+- **Refresh**: pick the current tab again to jump to the top, and again to reload; or pull a
+  feed down past its top
+- **Mini player**: leaving the watch page (Back, opening a channel, searching) keeps the video
+  playing in a small player in the corner
+- **Emoji** in titles, comments and descriptions, drawn in colour with Twemoji
 - **Shorts**: a full-height vertical player that loops, with swipe or D-pad navigation, like,
   dislike, comments, share and subscribe
 - **Search** with chips (All, Shorts, Videos, Channels, Playlists, Recently uploaded, Live) and a
@@ -47,6 +54,11 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 | Watch | Right / Left | Move between the player and the side panel |
 | Watch | □ | Player settings (quality, captions, loop, chapters) |
 | Watch | SELECT | Fullscreen |
+| Watch | ○ | Shrink into the mini player (keeps playing) |
+| Watch | Down, then × on the channel name | Open the channel (the video keeps playing small) |
+| Mini player | Down from the last tab in the rail, or touch | Focus the mini player |
+| Mini player | × / □ / START | Expand / close / play or pause (START works from any page) |
+| Tabs | × on the current tab | Scroll to the top; again to refresh |
 
 ## Installing
 
@@ -90,6 +102,15 @@ Tokens go only between the Vita and Google.
 5. In VivoTube, choose **Sign in** (top right). The app shows a code: open
    [google.com/device](https://www.google.com/device) on your phone or PC, enter the code, and
    allow access.
+
+### "For you"
+
+YouTube only personalises its own Home feed for its own apps, and it turns away tokens from a
+client like this one (VivoTube still tries once per session, in case that changes). So VivoTube
+builds the feed itself from what it knows about you: videos related to what you recently watched
+and liked (your YouTube likes when signed in, plus the history and likes on the memory card),
+with new uploads from your subscriptions mixed in. Videos you finished or disliked are left out.
+Refreshing starts from different videos, and scrolling down keeps finding more.
 
 Notes:
 
@@ -144,7 +165,7 @@ asset on the repository's latest release, so keep the VPK attached to each relea
 
 ### Host tests
 
-The parsers, fMP4 demuxer, captions, store and update helpers are platform-neutral and tested
+The parsers, fMP4 demuxer, captions, store, update, emoji and "For you" helpers are platform-neutral and tested
 on the PC against captured responses in `tests/fixtures/`, using zig's bundled clang:
 
 ```bash
@@ -155,6 +176,15 @@ sh tests/host/run.sh
 The captured responses aren't checked in (they contain other people's content and your IP
 address), so capture them first with `probe.py --save`. Tests whose fixture is missing are
 skipped.
+
+### Regenerating the emoji pack
+
+Download a Twemoji release from [jdecked/twemoji](https://github.com/jdecked/twemoji), then
+point the packer at its 72×72 PNGs (needs Pillow):
+
+```bash
+python -I tools/make_emoji.py <twemoji>/assets/72x72 --out assets/emoji/emoji.pak
+```
 
 ### Regenerating the LiveArea art
 
@@ -180,6 +210,8 @@ Its own fMP4 demuxer feeds `sceAvcdec` (output into YUV textures drawn by vita2d
 - Without signing in, the subscriptions feed is built from each channel's public RSS feed
   (latest 15 uploads per channel).
 - YouTube removed its Trending page in 2025, so Home uses topic feeds instead.
+- Scripts the Vita's fonts don't cover (Arabic, Hebrew, Thai and others) show as underscores.
+- Skin-tone variants of emoji show in the default tone, to keep the app small.
 - If YouTube starts requiring PO tokens for the visionOS client, playback will stop until the
   client definitions are updated (see `clients.json` above).
 
@@ -189,6 +221,9 @@ MIT, see [LICENSE](LICENSE). Bundled third-party components:
 
 - [Roboto](https://fonts.google.com/specimen/Roboto) (Apache License 2.0), in
   `assets/fonts/` with its license
+- [Twemoji](https://github.com/jdecked/twemoji) graphics, Copyright Twitter, Inc and other
+  contributors (CC-BY 4.0), resized to 32 px and packed by `tools/make_emoji.py` into
+  `assets/emoji/emoji.pak`, with the license in `assets/emoji/`
 - [RapidJSON](https://rapidjson.org) (MIT), in `third_party/rapidjson/`
 - Mozilla's CA certificate bundle (MPL 2.0), as `assets/cacert.pem`
 - Linked from VitaSDK packages: libcurl, mbedTLS, zlib, zstd, libvita2d, libjpeg-turbo,

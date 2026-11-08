@@ -18,7 +18,7 @@ namespace vt {
 
 namespace {
 
-std::string g_ca;
+std::string g_ca, g_caPem;  // bundle path, and its contents read once
 CURLSH* g_share = nullptr;
 std::mutex g_share_locks[CURL_LOCK_DATA_LAST];
 std::mutex g_pool_mutex;
@@ -217,6 +217,9 @@ std::string HttpResponse::describe() const {
 
 bool http_init(const std::string& caPath) {
     g_ca = caPath;
+    // Handed to every request from memory: many requests reading the file at once sometimes
+    // failed with "Problem with the SSL CA cert".
+    if (!caPath.empty() && !read_file(caPath, g_caPem)) g_caPem.clear();
     if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) return false;
     g_share = curl_share_init();
     if (g_share) {
@@ -275,7 +278,12 @@ HttpResponse http_request(const HttpRequest& req) {
     }
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
-    if (!g_ca.empty()) curl_easy_setopt(c, CURLOPT_CAINFO, g_ca.c_str());
+    bool caSet = false;
+    if (!g_caPem.empty()) {
+        curl_blob blob{(void*)g_caPem.data(), g_caPem.size(), CURL_BLOB_NOCOPY};
+        caSet = curl_easy_setopt(c, CURLOPT_CAINFO_BLOB, &blob) == CURLE_OK;
+    }
+    if (!caSet && !g_ca.empty()) curl_easy_setopt(c, CURLOPT_CAINFO, g_ca.c_str());
     if (g_share) curl_easy_setopt(c, CURLOPT_SHARE, g_share);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, req.connectTimeout);
     curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);

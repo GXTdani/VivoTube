@@ -38,6 +38,7 @@ public:
         else show(idx_);
     }
     ~ShortsScreen() override { stopPlayer(); }
+    bool playsVideo() const override { return true; }
 
     void onHide() override {
         if (player_) resume_ = player_->position();
@@ -49,6 +50,13 @@ public:
             hidden_ = false;
             startPlayer(resume_);
         }
+    }
+
+    // Picking the Shorts tab again: a fresh set of Shorts after the current one.
+    void refresh() override {
+        if (seedLoading_) return;
+        jumpTo_ = (int)shorts_.size();
+        loadSeed();
     }
 
     void update(Input& in) override {
@@ -262,6 +270,7 @@ private:
             }
             sequence_ = r.sequence;
             if (first && !shorts_.empty()) show(0);
+            else jumpToNew();
             if (!sequence_.empty()) loadSequence();
         });
     }
@@ -282,8 +291,16 @@ private:
             }
             sequence_ = p.continuation;
             if (first && !shorts_.empty()) show(0);
+            else jumpToNew();
             prefetch(idx_ + 1);
         });
+    }
+
+    void jumpToNew() {
+        if (jumpTo_ < 0 || jumpTo_ >= (int)shorts_.size()) return;
+        int j = jumpTo_;
+        jumpTo_ = -1;
+        show(j);
     }
 
     bool has(const std::string& id) const {
@@ -549,7 +566,7 @@ private:
     }
 
     std::vector<Short> shorts_;
-    int idx_ = 0;
+    int idx_ = 0, jumpTo_ = -1;
     std::string sequence_, seedError_;
     bool seeded_ = false, seedLoading_ = false, hidden_ = false;
     std::unique_ptr<Player> player_;
