@@ -106,9 +106,13 @@ protected:
 class HomeScreen : public LibraryScreen {
 public:
     HomeScreen() {
-        for (Feed& f : feeds_) {
+        for (int i = 0; i < kChips; i++) {
+            Feed& f = feeds_[i];
             f.style = FeedStyle::Grid;
             f.grid.padTop = 6;
+            // Recommendations leave out what the user hid; "Recently uploaded" is their own
+            // subscriptions, so it shows everything.
+            if (i != kRecent) f.hide = [](const Item& it) { return g_app->store.hidden(it); };
         }
         feeds_[0].emptyIcon = Icon::Home;
         feeds_[0].emptyTitle = "Try searching to get started";
@@ -194,7 +198,11 @@ public:
         if (f.takeRefresh()) refresh();
         if (def(cur_).kind == K_SEARCH && f.wantsMore(grid())) loadChip(cur_, true);
         if (cur_ == 0 && mode_ != Mode::Mix && !personalBusy_ && f.wantsMore(grid())) loadMorePersonal();
-        if (!chipsFocus_ && in.pressed(BTN_SQUARE) && f.selected()) g_app->itemMenu(*f.selected());
+        if (!chipsFocus_ && in.pressed(BTN_SQUARE) && f.selected()) g_app->itemMenu(*f.selected(), {}, cur_ != kRecent);
+    }
+
+    void hiddenChanged() override {
+        for (Feed& f : feeds_) f.prune();
     }
 
     void onShow() override {
@@ -369,6 +377,7 @@ private:
         if (fyRot_ > 0)  // a refresh: a different order than last time
             for (auto& v : m.related) v = shuffled(std::move(v));
         m.exclude = for_you_exclusions(g_app->store.history, g_app->store.disliked);
+        for (const std::string& id : g_app->store.notInterested) m.exclude.insert(id);
         for (const std::string& id : fySeeds_) m.exclude.insert(id);
         for (const Item& it : f.items) m.exclude.insert(it.id);
         m.subs = subsItems_;
@@ -377,6 +386,7 @@ private:
         std::vector<Item> page = blend_for_you(m, 36);
         std::string selId = f.selected() ? f.selected()->id : "";
         f.items.insert(f.items.end(), page.begin(), page.end());
+        f.prune();  // channels the user asked not to see
         f.list.count = f.grid.count = (int)f.items.size();
         reselect(f, selId);
         fyEmpty_ = page.empty() ? fyEmpty_ + 1 : 0;
@@ -506,6 +516,7 @@ private:
             if (!any) break;
         }
         f.items = std::move(out);
+        f.prune();
         f.list.count = f.grid.count = (int)f.items.size();
         reselect(f, selId);
         rebuildRecent();
@@ -2110,16 +2121,43 @@ private:
         Settings* st = &g_app->store.settings;
         Store* store = &g_app->store;
         static const std::vector<int> heights = {144, 240, 360, 480, 720};
-        static const std::vector<std::string> langs = {"en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh-Hans",
-                                                       "ru", "nl", "pl", "sv", "tr", "ar", "hi", "id"};
+        // YouTube's language codes (it still uses "iw" for Hebrew), each shown in English and in
+        // its own script.
+        static const std::vector<std::string> langs = {
+            "en", "es", "fr", "de", "it", "pt", "nl", "pl", "sv", "tr", "vi", "id", "ms", "fil",
+            "el", "ru", "uk", "ka", "hy", "ar", "iw", "fa", "ur", "hi", "mr", "bn", "pa", "gu",
+            "ta", "te", "kn", "ml", "si", "th", "lo", "km", "my", "am", "ja", "ko", "zh-Hans", "zh-Hant"};
         static const std::vector<std::string> langNames = {
-            "English", "Spanish", "French",  "German", "Italian", "Portuguese", "Japanese", "Korean", "Chinese (Simplified)",
-            "Russian", "Dutch",   "Polish",  "Swedish", "Turkish", "Arabic",    "Hindi",    "Indonesian"};
-        static const std::vector<std::string> regions = {"US", "GB", "CA", "AU", "IE", "DE", "FR", "ES", "IT",
-                                                         "NL", "SE", "PL", "BR", "MX", "AR", "JP", "KR", "IN"};
+            "English", "Spanish" G_DOT "Español", "French" G_DOT "Français", "German" G_DOT "Deutsch",
+            "Italian" G_DOT "Italiano", "Portuguese" G_DOT "Português", "Dutch" G_DOT "Nederlands",
+            "Polish" G_DOT "Polski", "Swedish" G_DOT "Svenska", "Turkish" G_DOT "Türkçe",
+            "Vietnamese" G_DOT "Tiếng Việt", "Indonesian" G_DOT "Bahasa Indonesia", "Malay" G_DOT "Bahasa Melayu",
+            "Filipino", "Greek" G_DOT "Ελληνικά", "Russian" G_DOT "Русский", "Ukrainian" G_DOT "Українська",
+            "Georgian" G_DOT "ქართული", "Armenian" G_DOT "Հայերեն", "Arabic" G_DOT "العربية",
+            "Hebrew" G_DOT "עברית", "Persian" G_DOT "فارسی", "Urdu" G_DOT "اردو", "Hindi" G_DOT "हिन्दी",
+            "Marathi" G_DOT "मराठी", "Bengali" G_DOT "বাংলা", "Punjabi" G_DOT "ਪੰਜਾਬੀ",
+            "Gujarati" G_DOT "ગુજરાતી", "Tamil" G_DOT "தமிழ்", "Telugu" G_DOT "తెలుగు", "Kannada" G_DOT "ಕನ್ನಡ",
+            "Malayalam" G_DOT "മലയാളം", "Sinhala" G_DOT "සිංහල", "Thai" G_DOT "ไทย", "Lao" G_DOT "ລາວ",
+            "Khmer" G_DOT "ខ្មែរ", "Burmese" G_DOT "မြန်မာ", "Amharic" G_DOT "አማርኛ", "Japanese" G_DOT "日本語",
+            "Korean" G_DOT "한국어", "Chinese, Simplified" G_DOT "简体中文", "Chinese, Traditional" G_DOT "繁體中文"};
+        static const std::vector<std::string> regions = {
+            "US", "GB", "CA", "AU", "IE", "NZ", "IN", "PK", "BD", "LK", "NP", "DE", "FR", "ES", "IT", "NL",
+            "SE", "PL", "GR", "TR", "RU", "UA", "GE", "AM", "IL", "SA", "AE", "EG", "MA", "NG", "KE", "ZA",
+            "BR", "MX", "AR", "CO", "JP", "KR", "TW", "HK", "TH", "VN", "ID", "MY", "PH", "SG"};
+        static const std::vector<std::string> regionNames = {
+            "United States", "United Kingdom", "Canada", "Australia", "Ireland", "New Zealand", "India", "Pakistan",
+            "Bangladesh", "Sri Lanka", "Nepal", "Germany", "France", "Spain", "Italy", "Netherlands", "Sweden",
+            "Poland", "Greece", "Türkiye", "Russia", "Ukraine", "Georgia", "Armenia", "Israel", "Saudi Arabia",
+            "United Arab Emirates", "Egypt", "Morocco", "Nigeria", "Kenya", "South Africa", "Brazil", "Mexico",
+            "Argentina", "Colombia", "Japan", "South Korea", "Taiwan", "Hong Kong", "Thailand", "Vietnam",
+            "Indonesia", "Malaysia", "Philippines", "Singapore"};
         auto langName = [](const std::string& code) {
             int i = indexOf(langs, code);
             return i >= 0 ? langNames[i] : code;
+        };
+        auto regionName = [](const std::string& code) {
+            int i = indexOf(regions, code);
+            return i >= 0 ? regionNames[i] : code;
         };
 
         // Playback
@@ -2171,8 +2209,8 @@ private:
                                  g_app->applyLocale();
                              });
                          }});
-        rows_.push_back({Row::Choice, "", "Location", [st] { return st->gl; }, nullptr, [st, store] {
-                             choose("Location", regions, indexOf(regions, st->gl), [st, store](int i) {
+        rows_.push_back({Row::Choice, "", "Location", [st, regionName] { return regionName(st->gl); }, nullptr, [st, store] {
+                             choose("Location", regionNames, indexOf(regions, st->gl), [st, store](int i) {
                                  st->gl = regions[i];
                                  store->saveSettings();
                                  g_app->applyLocale();
@@ -2192,6 +2230,33 @@ private:
                                  store->clearSearches();
                                  store->saveSearches();
                                  g_app->toast("Search history cleared");
+                             });
+                         }});
+        rows_.push_back({Row::Action, "", "Hidden recommendations",
+                         [store] {
+                             size_t v = store->notInterested.size(), c = store->blockedChannels.size();
+                             if (!v && !c) return std::string("Nothing hidden");
+                             return str_printf("%u video%s, %u channel%s", (unsigned)v, v == 1 ? "" : "s",
+                                               (unsigned)c, c == 1 ? "" : "s");
+                         },
+                         nullptr, [store] {
+                             if (store->notInterested.empty() && store->blockedChannels.empty()) {
+                                 g_app->toast("Nothing is hidden from your recommendations");
+                                 return;
+                             }
+                             std::vector<std::string> opts{"Show everything again"};
+                             for (const Subscription& s : store->blockedChannels)
+                                 opts.push_back("Recommend " + (s.name.empty() ? s.id : s.name) + " again");
+                             g_app->showMenu("Hidden recommendations", opts, [store](int i) {
+                                 if (i == 0) {
+                                     store->clearHidden();
+                                     g_app->toast("Hidden videos and channels can be recommended again");
+                                 } else if (i > 0 && i <= (int)store->blockedChannels.size()) {
+                                     std::string name = store->blockedChannels[i - 1].name;
+                                     store->unblockChannel((size_t)i - 1);
+                                     g_app->toast(name.empty() ? std::string("Channel can be recommended again")
+                                                               : name + " can be recommended again");
+                                 }
                              });
                          }});
         rows_.push_back({Row::Action, "", "Remove all subscriptions", nullptr, nullptr, [store] {

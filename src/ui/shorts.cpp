@@ -171,7 +171,8 @@ public:
         std::string title = s.item.title;
         const auto& lines = g_gfx.wrap(title, kPW - 28, 0.7f, 2);
         ty -= lines.size() * g_gfx.lineHeight(0.7f);
-        for (size_t i = 0; i < lines.size(); i++) g_gfx.text(x + 14, ty + i * g_gfx.lineHeight(0.7f), col::text, 0.7f, lines[i]);
+        for (size_t i = 0; i < lines.size(); i++)
+            g_gfx.textLine(x + 14, ty + i * g_gfx.lineHeight(0.7f), kPW - 28, col::text, 0.7f, lines[i]);
         float cy = ty - 26;
         std::string ch = s.item.channel.empty() ? "" : (s.item.channel[0] == '@' ? s.item.channel : "@" + nospace(s.item.channel));
         draw_avatar(avatar(), s.item.channel, x + 28, cy + 2, 14, rgba(0, 0, 0));

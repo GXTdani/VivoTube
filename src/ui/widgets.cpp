@@ -823,6 +823,7 @@ bool Feed::append(const Page& p) {
         plain.shorts.clear();
         size_t before = items.size();
         for (const Item& it : plain.items) {
+            if (hide && hide(it)) continue;
             bool dup = false;
             for (size_t k = before > 60 ? before - 60 : 0; k < before && !dup; k++) dup = items[k].id == it.id;
             if (!dup) items.push_back(it);
@@ -831,9 +832,13 @@ bool Feed::append(const Page& p) {
         list.count = grid.count = (int)items.size();
         return items.size() > before;
     }
-    if (shelf.empty() && !p.shorts.empty()) shelf = p.shorts;
+    if (shelf.empty() && !p.shorts.empty()) {
+        for (const Item& it : p.shorts)
+            if (!hide || !hide(it)) shelf.push_back(it);
+    }
     size_t before = items.size();
     for (const Item& it : p.items) {
+        if (hide && hide(it)) continue;
         bool dup = false;
         // Continuations sometimes repeat the last few items of the previous page.
         for (size_t k = before > 40 ? before - 40 : 0; k < before; k++) {
@@ -851,6 +856,38 @@ bool Feed::append(const Page& p) {
 
 void Feed::setSel(int i) {
     list.sel = grid.sel = std::max(0, std::min(i, (int)items.size() - 1));
+}
+
+int Feed::prune() {
+    if (!hide) return 0;
+    int s = sel(), removed = 0, removedBefore = 0;
+    bool withProgress = progress.size() == items.size();
+    size_t o = 0;
+    for (size_t k = 0; k < items.size(); k++) {
+        if (hide(items[k])) {
+            removed++;
+            if ((int)k < s) removedBefore++;
+            continue;
+        }
+        if (o != k) {
+            items[o] = std::move(items[k]);
+            if (withProgress) progress[o] = progress[k];
+        }
+        o++;
+    }
+    items.resize(o);
+    if (withProgress) progress.resize(o);
+    size_t before = shelf.size();
+    shelf.erase(std::remove_if(shelf.begin(), shelf.end(), [this](const Item& it) { return hide(it); }), shelf.end());
+    removed += (int)(before - shelf.size());
+    list.count = grid.count = (int)items.size();
+    if (!items.empty()) {
+        int n = (int)items.size();
+        int ns = std::max(0, std::min(s - removedBefore, n - 1));
+        list.sel = grid.sel = ns;
+    }
+    if (shelfSel >= (int)shelf.size()) shelfSel = std::max(0, (int)shelf.size() - 1);
+    return removed;
 }
 
 void Feed::scrollToTop() {
@@ -1061,7 +1098,7 @@ void Menu::draw() {
     float y = box_.y + 14;
     if (!title_.empty()) {
         for (size_t i = 0; i < titleLines.size(); i++)
-            g_gfx.text(box_.x + 20, y + i * g_gfx.lineHeight(0.74f), col::text2, 0.74f, titleLines[i]);
+            g_gfx.textLine(box_.x + 20, y + i * g_gfx.lineHeight(0.74f), w - 40, col::text2, 0.74f, titleLines[i]);
         y = box_.y + titleH - 4;
         g_gfx.rect(box_.x, y - 1, w, 1, col::divider);
         y += 4;

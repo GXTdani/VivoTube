@@ -167,6 +167,28 @@ void App::closeMini() {
     if (zone_ == Zone::Mini) zone_ = Zone::Rail;
 }
 
+void App::enqueue(const Item& it, bool next) {
+    Screen* w = nullptr;
+    if (Screen* t = top(); t && t->isWatch()) w = t;
+    else if (mini_) w = mini_.get();
+    if (w && w->videoId() == it.id) {
+        toast("Already playing");
+        return;
+    }
+    if (w && w->enqueue(it, next)) {
+        toast(next ? "Playing next" : "Added to queue");
+        return;
+    }
+    openVideo(it, {it}, 0);
+}
+
+void App::playInMini(const Item& it, const std::vector<Item>& queue, int queueIndex) {
+    std::unique_ptr<Screen> s = make_watch_screen(it, queue, queueIndex);
+    s->setMinimized(true);
+    if (mini_) graveyard_.push_back(std::move(mini_));
+    mini_ = std::move(s);
+}
+
 void App::openItem(const Item& it, const std::vector<Item>& queue, int queueIndex) {
     switch (it.type) {
         case ItemType::Video:
@@ -408,11 +430,22 @@ void App::shareItem(const Item& it) {
     share(it.title, url);
 }
 
-void App::itemMenu(const Item& it, std::vector<std::pair<std::string, std::function<void()>>> extra) {
+void App::hiddenChanged() {
+    for (auto& st : stacks_)
+        for (auto& s : st) s->hiddenChanged();
+    if (mini_) mini_->hiddenChanged();
+}
+
+void App::itemMenu(const Item& it, std::vector<std::pair<std::string, std::function<void()>>> extra,
+                   bool recommended) {
     std::vector<MenuAction> acts;
     for (auto& e : extra) acts.push_back({e.first, Icon::Trash, e.second});
     Item copy = it;
     if (it.type == ItemType::Video) {
+        if (!it.shorts && !it.live) {
+            acts.push_back({"Play next in queue", Icon::PlayNext, [this, copy] { enqueue(copy, true); }});
+            acts.push_back({"Add to queue", Icon::AddToQueue, [this, copy] { enqueue(copy, false); }});
+        }
         bool wl = store.inWatchLater(it.id);
         acts.push_back({wl ? "Remove from Watch later" : "Save to Watch later", Icon::WatchLater, [this, copy, wl] {
                             store.toggleWatchLater(copy);
@@ -426,6 +459,20 @@ void App::itemMenu(const Item& it, std::vector<std::pair<std::string, std::funct
             bool sub = store.isSubscribed(it.channelId);
             acts.push_back({sub ? "Unsubscribe from channel" : "Subscribe to channel", Icon::Subscriptions,
                             [this, copy] { toggleSubscription(copy.channelId, copy.channel, copy.avatar); }});
+        }
+        if (recommended) {
+            acts.push_back({"Not interested", Icon::NotInterested, [this, copy] {
+                                store.markNotInterested(copy.id);
+                                hiddenChanged();
+                                toast("Video removed from your recommendations");
+                            }});
+            if (!it.channelId.empty() || !it.channel.empty())
+                acts.push_back({"Don't recommend channel", Icon::NotInterested, [this, copy] {
+                                    store.blockChannel(copy.channelId, copy.channel);
+                                    hiddenChanged();
+                                    toast(copy.channel.empty() ? std::string("We won't recommend this channel again")
+                                                               : "We won't recommend " + copy.channel + " again");
+                                }});
         }
     } else if (it.type == ItemType::Channel) {
         acts.push_back({"Go to channel", Icon::Account, [this, copy] { openChannel(copy.id, copy.title); }});

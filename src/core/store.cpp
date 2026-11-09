@@ -102,6 +102,20 @@ void Store::load() {
     liked.clear();
     disliked.clear();
     playlists.clear();
+    notInterested.clear();
+    blockedChannels.clear();
+    if (JDocPtr d = load_json(path("hidden.json"))) {
+        if (const JVal* l = jget(*d, "videos"))
+            if (l->IsArray())
+                for (auto& v : l->GetArray())
+                    if (v.IsString()) notInterested.push_back(v.GetString());
+        if (const JVal* l = jget(*d, "channels"))
+            if (l->IsArray())
+                for (auto& v : l->GetArray()) {
+                    Subscription s{jstr(jget(v, "id")), jstr(jget(v, "name")), ""};
+                    if (!s.id.empty() || !s.name.empty()) blockedChannels.push_back(s);
+                }
+    }
     if (JDocPtr d = load_json(path("ratings.json"))) {
         if (const JVal* l = jget(*d, "liked"))
             if (l->IsArray())
@@ -367,6 +381,75 @@ void Store::setRating(const Item& item, int r) {
     if (r < 0) disliked.push_back(item.id);
     if (disliked.size() > 1000) disliked.erase(disliked.begin());
     saveRatings();
+}
+
+bool Store::channelBlocked(const std::string& channelId, const std::string& name) const {
+    for (const Subscription& s : blockedChannels) {
+        if (!channelId.empty() && !s.id.empty()) {
+            if (s.id == channelId) return true;
+        } else if (!name.empty() && s.name == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Store::hidden(const Item& it) const {
+    if (it.type == ItemType::Video &&
+        std::find(notInterested.begin(), notInterested.end(), it.id) != notInterested.end())
+        return true;
+    if (blockedChannels.empty()) return false;
+    if (it.type == ItemType::Channel) return channelBlocked(it.id, it.title);
+    return channelBlocked(it.channelId, it.channel);
+}
+
+void Store::markNotInterested(const std::string& videoId) {
+    if (videoId.empty()) return;
+    notInterested.erase(std::remove(notInterested.begin(), notInterested.end(), videoId), notInterested.end());
+    notInterested.insert(notInterested.begin(), videoId);
+    if (notInterested.size() > 1000) notInterested.resize(1000);
+    saveHidden();
+}
+
+void Store::blockChannel(const std::string& channelId, const std::string& name) {
+    if ((channelId.empty() && name.empty()) || channelBlocked(channelId, name)) return;
+    blockedChannels.insert(blockedChannels.begin(), Subscription{channelId, name, ""});
+    saveHidden();
+}
+
+void Store::unblockChannel(size_t index) {
+    if (index >= blockedChannels.size()) return;
+    blockedChannels.erase(blockedChannels.begin() + index);
+    saveHidden();
+}
+
+void Store::clearHidden() {
+    notInterested.clear();
+    blockedChannels.clear();
+    saveHidden();
+}
+
+void Store::saveHidden() {
+    rapidjson::StringBuffer sb;
+    Writer w(sb);
+    w.StartObject();
+    w.Key("videos");
+    w.StartArray();
+    for (const std::string& id : notInterested) w.String(id.c_str());
+    w.EndArray();
+    w.Key("channels");
+    w.StartArray();
+    for (const Subscription& s : blockedChannels) {
+        w.StartObject();
+        w.Key("id");
+        w.String(s.id.c_str());
+        w.Key("name");
+        w.String(s.name.c_str());
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    save(path("hidden.json"), sb);
 }
 
 LocalPlaylist* Store::playlist(const std::string& id) {

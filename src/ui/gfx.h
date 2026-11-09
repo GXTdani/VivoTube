@@ -14,6 +14,7 @@ namespace vt {
 
 struct FontEngine;
 struct EmojiAtlas;
+struct TextCache;
 
 constexpr int SCREEN_W = 960;
 constexpr int SCREEN_H = 544;
@@ -66,22 +67,30 @@ public:
     // Called once per frame before drawing (recycles the glyph atlas when it filled up).
     void beginFrame();
 
-    // Text is positioned by the top of its line box. Roboto at 18 px per unit of scale, with the
-    // system font standing in for characters Roboto lacks (CJK, symbols) and Twemoji images for emoji.
+    // Text is positioned by the top of its line box. Roboto at 18 px per unit of scale; Noto Sans
+    // for Arabic, Hebrew, Indic, Southeast Asian and other scripts (shaped with HarfBuzz and put in
+    // order with FriBidi); the Vita's own fonts for Japanese, Chinese, Korean and symbols; and
+    // Twemoji images for emoji.
     void text(float x, float y, uint32_t color, float scale, const std::string& s, int weight = W_REGULAR);
     // Medium weight (titles, buttons).
     void textBold(float x, float y, uint32_t color, float scale, const std::string& s) {
         text(x, y, color, scale, s, W_MEDIUM);
     }
     void textCentered(float cx, float y, uint32_t color, float scale, const std::string& s, int weight = W_REGULAR);
+    // One line of a wrapped paragraph in a box `maxWidth` wide: on the left, or on the right
+    // when the line reads right to left.
+    void textLine(float x, float y, float maxWidth, uint32_t color, float scale, const std::string& s,
+                  int weight = W_REGULAR);
     void textRight(float rx, float y, uint32_t color, float scale, const std::string& s, int weight = W_REGULAR);
     int width(const std::string& s, float scale, int weight = W_REGULAR);
+    // Whether s reads right to left (its first strong character is Arabic, Hebrew...).
+    bool rtl(const std::string& s) const;
     float lineHeight(float scale) const { return lineH_ * scale; }
 
     // Word-wrapped lines (cached). Long text is cut to maxLines with "...".
     const std::vector<std::string>& wrap(const std::string& s, float maxWidth, float scale, int maxLines,
                                          int weight = W_REGULAR);
-    // Draws wrapped text; returns height used.
+    // Draws wrapped text (right-to-left paragraphs aligned right); returns height used.
     float paragraph(float x, float y, float maxWidth, uint32_t color, float scale, const std::string& s, int maxLines,
                     float lineGap = 1.0f, int weight = W_REGULAR);
     std::string ellipsize(const std::string& s, float maxWidth, float scale, int weight = W_REGULAR);
@@ -109,10 +118,13 @@ public:
     double time = 0;
 
 private:
-    float measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color);
+    float measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color,
+                  bool keep = true);
+    int trialWidth(const std::string& s, float scale, int weight);  // not kept in the shaping cache
     vita2d_pgf* font_ = nullptr;
     FontEngine* ft_ = nullptr;
     EmojiAtlas* emoji_ = nullptr;
+    TextCache* cache_ = nullptr;
     float lineH_ = 21, ascent_ = 16;
     std::unordered_map<std::string, std::vector<std::string>> wrapCache_;
 };

@@ -17,6 +17,11 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 - **Mini player**: leaving the watch page (Back, opening a channel, searching) keeps the video
   playing in a small player in the corner
 - **Emoji** in titles, comments and descriptions, drawn in colour with Twemoji
+- **Text in every major script**: Arabic, Hebrew, Persian and Urdu (joined and right to left),
+  Hindi and the other Indic scripts, Thai, Lao, Khmer, Burmese, Sinhala, Georgian, Armenian,
+  Amharic, Greek, Cyrillic, Vietnamese, plus Chinese, Japanese and Korean from the Vita's own
+  fonts. Text is shaped with HarfBuzz and laid out with the Unicode bidi algorithm (FriBidi),
+  using bundled Noto Sans fonts. Settings lists every language in its own script
 - **Shorts**: a full-height vertical player that loops, with swipe or D-pad navigation, like,
   dislike, comments, share and subscribe
 - **Search** with chips (All, Shorts, Videos, Channels, Playlists, Recently uploaded, Live) and a
@@ -25,6 +30,11 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 - **Watch page**: like / dislike, Subscribe, Share, Save to playlist, chapters (on the seek bar
   and as a list), loop, double-tap to seek 10 s, captions, quality from 144p to 720p, resume
   where you left off, fullscreen, autoplay with an Up next countdown
+- **Playback speed** from 0.25x to 2x, with time-stretched audio so voices keep their pitch
+- **Queue**: "Play next in queue" and "Add to queue" from any video's menu build an Up next list
+  on the watch page, and the mini player moves on to the next queued video by itself
+- **Not interested** and **Don't recommend channel** on Home and related videos hide a video or
+  a whole channel from your recommendations (undo in Settings > Hidden recommendations)
 - **Comments** with Top / Newest sorting and reply threads
 - **Guide** (the side menu) with your library and subscriptions; **You** page with history,
   playlists, Watch later and Liked videos
@@ -45,14 +55,14 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 | Anywhere | ○ | Back |
 | Anywhere | △ | Search |
 | Anywhere | SELECT | Open the Guide |
-| Lists | □ | More options (Save, Share, go to channel, subscribe) |
+| Lists | □ | More options (queue, Save, Share, go to channel, subscribe, Not interested) |
 | Home / Search / Channel | L / R | Switch chip or tab |
 | Shorts | Up / Down or L / R, swipe | Previous / next Short |
 | Shorts | Right | Move to the like / comment / share buttons |
 | Watch | × or START | Play / pause |
 | Watch | L / R, double-tap the sides | Seek back / forward 10 s |
 | Watch | Right / Left | Move between the player and the side panel |
-| Watch | □ | Player settings (quality, captions, loop, chapters) |
+| Watch | □ | Player settings (quality, speed, captions, loop, chapters) |
 | Watch | SELECT | Fullscreen |
 | Watch | ○ | Shrink into the mini player (keeps playing) |
 | Watch | Down, then × on the channel name | Open the channel (the video keeps playing small) |
@@ -138,7 +148,7 @@ python -I tools/probe.py
 You need [VitaSDK](https://vitasdk.org) plus these packages:
 
 ```bash
-vdpm curl-mbedtls mbedtls zlib zstd bzip2 libvita2d freetype libpng libjpeg-turbo
+vdpm curl-mbedtls mbedtls zlib zstd bzip2 libvita2d freetype libpng libjpeg-turbo harfbuzz fribidi
 ```
 
 Then:
@@ -165,8 +175,9 @@ asset on the repository's latest release, so keep the VPK attached to each relea
 
 ### Host tests
 
-The parsers, fMP4 demuxer, captions, store, update, emoji and "For you" helpers are platform-neutral and tested
-on the PC against captured responses in `tests/fixtures/`, using zig's bundled clang:
+The parsers, fMP4 demuxer, captions, store, update, emoji, "For you", text and audio time-stretch
+helpers are platform-neutral and tested on the PC (against captured responses in
+`tests/fixtures/` where they need them), using zig's bundled clang:
 
 ```bash
 python -I tools/probe.py --save
@@ -184,6 +195,15 @@ point the packer at its 72×72 PNGs (needs Pillow):
 
 ```bash
 python -I tools/make_emoji.py <twemoji>/assets/72x72 --out assets/emoji/emoji.pak
+```
+
+### Regenerating the Unicode tables
+
+`src/core/text_tables.inc` (combining marks and styled letters) is generated from Python's
+`unicodedata`:
+
+```bash
+python -I tools/gen_text_tables.py
 ```
 
 ### Regenerating the LiveArea art
@@ -210,7 +230,8 @@ Its own fMP4 demuxer feeds `sceAvcdec` (output into YUV textures drawn by vita2d
 - Without signing in, the subscriptions feed is built from each channel's public RSS feed
   (latest 15 uploads per channel).
 - YouTube removed its Trending page in 2025, so Home uses topic feeds instead.
-- Scripts the Vita's fonts don't cover (Arabic, Hebrew, Thai and others) show as underscores.
+- A few rare scripts (Tibetan, Mongolian, Syriac, N'Ko and others) have no bundled font and
+  show as boxes.
 - Skin-tone variants of emoji show in the default tone, to keep the app small.
 - If YouTube starts requiring PO tokens for the visionOS client, playback will stop until the
   client definitions are updated (see `clients.json` above).
@@ -221,10 +242,16 @@ MIT, see [LICENSE](LICENSE). Bundled third-party components:
 
 - [Roboto](https://fonts.google.com/specimen/Roboto) (Apache License 2.0), in
   `assets/fonts/` with its license
+- [Noto Sans](https://github.com/notofonts) fonts for 20 scripts, Copyright 2022 The Noto
+  Project Authors (SIL Open Font License 1.1), in `assets/fonts/noto/` with the license
 - [Twemoji](https://github.com/jdecked/twemoji) graphics, Copyright Twitter, Inc and other
   contributors (CC-BY 4.0), resized to 32 px and packed by `tools/make_emoji.py` into
   `assets/emoji/emoji.pak`, with the license in `assets/emoji/`
 - [RapidJSON](https://rapidjson.org) (MIT), in `third_party/rapidjson/`
 - Mozilla's CA certificate bundle (MPL 2.0), as `assets/cacert.pem`
 - Linked from VitaSDK packages: libcurl, mbedTLS, zlib, zstd, libvita2d, libjpeg-turbo,
-  FreeType, libpng, under their own licenses
+  FreeType, libpng, [HarfBuzz](https://harfbuzz.github.io) (MIT-style "Old MIT" license), under
+  their own licenses
+- [GNU FriBidi](https://github.com/fribidi/fribidi) (LGPL 2.1 or later), linked statically from
+  the VitaSDK package. VivoTube's complete source and build scripts are in this repository, so
+  you can rebuild it against a modified FriBidi

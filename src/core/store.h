@@ -52,6 +52,9 @@ public:
     std::vector<Item> liked;            // Liked videos, newest first
     std::vector<std::string> disliked;  // video IDs
     std::vector<LocalPlaylist> playlists;  // most recently changed first
+    // "Not interested" (video IDs, newest first) and "Don't recommend channel".
+    std::vector<std::string> notInterested;
+    std::vector<Subscription> blockedChannels;  // id and name (avatar unused)
     Settings settings;
 
     bool isSubscribed(const std::string& channelId) const;
@@ -75,6 +78,15 @@ public:
     int rating(const std::string& videoId) const;
     void setRating(const Item& item, int r);
 
+    // Whether a recommendation should be left out: a video marked "Not interested", or anything
+    // from a channel marked "Don't recommend channel".
+    bool hidden(const Item& item) const;
+    bool channelBlocked(const std::string& channelId, const std::string& name) const;
+    void markNotInterested(const std::string& videoId);
+    void blockChannel(const std::string& channelId, const std::string& name);
+    void unblockChannel(size_t index);
+    void clearHidden();
+
     LocalPlaylist* playlist(const std::string& id);
     std::string createPlaylist(const std::string& title);  // returns the new ID
     void deletePlaylist(const std::string& id);
@@ -89,6 +101,7 @@ public:
     void saveSettings();
     void saveRatings();
     void savePlaylists();
+    void saveHidden();
 
     static std::string itemToJson(const Item& it);
 

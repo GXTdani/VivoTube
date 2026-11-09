@@ -25,8 +25,18 @@ SOFTWARE.
 Third-party components distributed with VivoTube keep their own licenses:
 
 - Roboto fonts (assets/fonts/): Apache License 2.0, see assets/fonts/LICENSE-Roboto.txt
+- Noto Sans fonts (assets/fonts/noto/): Copyright 2022 The Noto Project Authors
+  (https://github.com/notofonts), SIL Open Font License 1.1, see
+  assets/fonts/noto/LICENSE-Noto.txt
 - Twemoji graphics (assets/emoji/emoji.pak): Copyright Twitter, Inc and other contributors,
   Creative Commons Attribution 4.0 (CC-BY 4.0), see assets/emoji/LICENSE-Twemoji.txt.
   https://github.com/jdecked/twemoji. Resized to 32x32 and palette-reduced for VivoTube.
 - RapidJSON (third_party/rapidjson/): MIT License, see its license file
 - Mozilla CA certificate bundle (assets/cacert.pem): Mozilla Public License 2.0
+- HarfBuzz (linked into eboot.bin): the MIT-style "Old MIT" license, see
+  https://github.com/harfbuzz/harfbuzz/blob/main/COPYING
+- GNU FriBidi (linked into eboot.bin): GNU Lesser General Public License 2.1 or later, see
+  https://github.com/fribidi/fribidi/blob/master/COPYING. VivoTube's complete source code and
+  build scripts are published, so the program can be relinked against a modified FriBidi.
+- libcurl, mbedTLS, zlib, zstd, libvita2d, libjpeg-turbo, FreeType and libpng (linked into
+  eboot.bin from VitaSDK packages): their own licenses

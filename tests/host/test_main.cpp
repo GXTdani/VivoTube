@@ -2,7 +2,9 @@
 // Most fixtures are captured live by `python -I tools/probe.py --save`. They aren't in the
 // repository (they hold other people's content and the capturing machine's IP address), so a
 // test whose fixture is missing is skipped rather than failed.
+#include <cmath>
 #include <cstdio>
+#include <vector>
 #include <cstring>
 #include <string>
 
@@ -14,6 +16,8 @@
 #include "../../src/core/json_util.h"
 #include "../../src/core/parse.h"
 #include "../../src/core/store.h"
+#include "../../src/core/stretch.h"
+#include "../../src/core/text.h"
 #include "../../src/core/google.h"
 #include "../../src/core/update.h"
 #include "../../src/core/zip.h"
@@ -566,6 +570,13 @@ static void test_store() {
         CHECK(!s.togglePlaylistItem(pid, v));  // second toggle removes
         std::string pid2 = s.createPlaylist("");
         s.deletePlaylist(pid2);
+        s.clearHidden();
+        s.markNotInterested("vidX");
+        s.markNotInterested("vidY");
+        s.markNotInterested("vidX");  // moves to the front, no duplicate
+        s.blockChannel("UCblock", "Blocked");
+        s.blockChannel("UCblock", "Blocked");  // duplicate ignored
+        s.blockChannel("", "Name only");
     }
     Store s(dir);
     s.load();
@@ -593,6 +604,154 @@ static void test_store() {
     CHECK(!s.inWatchLater("vid1"));
     s.unsubscribe("UCabc");
     CHECK(!s.isSubscribed("UCabc"));
+
+    // "Not interested" and "Don't recommend channel" survive a reload.
+    CHECK(s.notInterested.size() == 2 && s.notInterested[0] == "vidX");
+    CHECK(s.blockedChannels.size() == 2);
+    Item hv;
+    hv.id = "vidY";
+    CHECK(s.hidden(hv));
+    hv.id = "other";
+    hv.channelId = "UCblock";
+    CHECK(s.hidden(hv));
+    hv.channelId = "UCfine";
+    hv.channel = "Blocked";  // the ID decides when both sides have one
+    CHECK(!s.hidden(hv));
+    hv.channelId.clear();
+    hv.channel = "Name only";
+    CHECK(s.hidden(hv));
+    Item ch;
+    ch.type = ItemType::Channel;
+    ch.id = "UCblock";
+    CHECK(s.hidden(ch));
+    Item vx;
+    vx.id = "vidX";
+    vx.type = ItemType::Playlist;  // only videos are hidden by ID
+    CHECK(!s.hidden(vx));
+    s.unblockChannel(0);
+    CHECK(s.blockedChannels.size() == 1 && s.blockedChannels[0].name == "Blocked");
+    s.clearHidden();
+    hv.id = "vidY";
+    CHECK(!s.hidden(hv));
+}
+
+static void test_text() {
+    printf("text\n");
+    // UTF-8 round trip.
+    std::string u;
+    utf8_append(u, 'A');
+    utf8_append(u, 0xE9);
+    utf8_append(u, 0x0627);
+    utf8_append(u, 0x1F600);
+    utf8_append(u, 0xD800);  // a lone surrogate becomes U+FFFD
+    CHECK(u == "A\xC3\xA9\xD8\xA7\xF0\x9F\x98\x80\xEF\xBF\xBD");
+    std::vector<uint32_t> cps;
+    for (size_t i = 0; i < u.size(); i = utf8_next(u, i)) cps.push_back(utf8_decode(u, i));
+    CHECK(cps.size() == 5 && cps[0] == 'A' && cps[1] == 0xE9 && cps[2] == 0x0627 && cps[3] == 0x1F600 &&
+          cps[4] == 0xFFFD);
+
+    CHECK(script_of('a') == Script::Common);
+    CHECK(script_of(0x0416) == Script::Common);  // Cyrillic comes from Roboto
+    CHECK(script_of(0x0627) == Script::Arabic);
+    CHECK(script_of(0x05D0) == Script::Hebrew);
+    CHECK(script_of(0x0915) == Script::Devanagari);
+    CHECK(script_of(0x0B95) == Script::Tamil);
+    CHECK(script_of(0x0E01) == Script::Thai);
+    CHECK(script_of(0x10D0) == Script::Georgian);
+    CHECK(script_of(0x1200) == Script::Ethiopic);
+    CHECK(script_of(0x3042) == Script::Kana);
+    CHECK(script_of(0x4E2D) == Script::Han);
+    CHECK(script_of(0xAC00) == Script::Hangul);
+    CHECK(noto_family(Script::Arabic) && std::string(noto_family(Script::Arabic)) == "Arabic");
+    CHECK(noto_family(Script::Common) == nullptr && noto_family(Script::Han) == nullptr);
+    CHECK(noto_has_medium(Script::Devanagari) && !noto_has_medium(Script::Oriya));
+
+    CHECK(is_mark(0x0301) && is_mark(0x093F) && is_mark(0x0E31));
+    CHECK(!is_mark('a') && !is_mark(0x0915));
+    CHECK(is_invisible(0x200B) && is_invisible(0x200F) && is_invisible(0x2067) && is_invisible(0xFEFF));
+    CHECK(!is_invisible(' ') && !is_invisible('a'));
+
+    CHECK(!needs_shaping("Plain ASCII title"));
+    CHECK(!needs_shaping("Caf\xC3\xA9 \xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0"));  // precomposed Latin, Cyrillic
+    CHECK(!needs_shaping("\xE6\x97\xA5\xE6\x9C\xAC"));  // Han
+    CHECK(needs_shaping("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x8A"));  // Arabic
+    CHECK(needs_shaping("\xE0\xA4\xB9\xE0\xA4\xBF\xE0\xA4\x82"));  // Devanagari
+    CHECK(needs_shaping("e\xCC\x81"));  // e + combining acute
+    CHECK(needs_shaping("a\xE2\x80\x8F" "b"));  // RLM
+    CHECK(has_kana("\xE3\x81\x82") && !has_kana("\xE6\x97\xA5"));
+
+    bool bold = false;
+    CHECK(fold_styled(0x1D400, &bold) == 'A' && bold);     // MATHEMATICAL BOLD CAPITAL A
+    CHECK(fold_styled(0x1D4B8, &bold) == 'c' && !bold);    // MATHEMATICAL SCRIPT SMALL C
+    CHECK(fold_styled(0x1D7CE, &bold) == '0' && bold);     // MATHEMATICAL BOLD DIGIT ZERO
+    CHECK(fold_styled(0x211D, &bold) == 'R');              // DOUBLE-STRUCK CAPITAL R
+    CHECK(fold_styled('x', &bold) == 'x' && !bold);
+    CHECK(fold_styled(0x0627, &bold) == 0x0627);
+
+    CHECK(can_break_between('a', 'b'));
+    CHECK(!can_break_between('e', 0x0301));      // before a combining mark
+    CHECK(!can_break_between(0x0915, 0x094D));   // before a virama
+    CHECK(!can_break_between(0x094D, 0x0937));   // after a virama
+    CHECK(!can_break_between(0x200D, 'a'));      // after a ZWJ
+    CHECK(!can_break_between(0x0E40, 0x0E01));   // after a Thai leading vowel
+    CHECK(!can_break_between(0x0E01, 0x0E32));   // before a Thai following vowel
+    CHECK(can_break_between(0x0E01, 0x0E02));
+}
+
+static void test_stretch() {
+    printf("stretch\n");
+    const int rate = 44100;
+    std::vector<int16_t> in((size_t)rate * 2 * 2);  // 2 s of a 440 Hz tone
+    for (size_t i = 0; i < in.size() / 2; i++) {
+        int16_t v = (int16_t)(8000 * std::sin(2 * 3.14159265 * 440 * i / rate));
+        in[i * 2] = in[i * 2 + 1] = v;
+    }
+    for (double speed : {0.5, 1.5, 2.0}) {
+        TimeStretch ts;
+        ts.setSampleRate(rate);
+        ts.setSpeed(speed);
+        std::vector<int16_t> out;
+        std::vector<int16_t> buf(1024 * 2);
+        bool positionsOk = true;
+        double lastPos = -1;
+        for (size_t at = 0; at < in.size() / 2; at += 1024) {
+            int n = (int)std::min<size_t>(1024, in.size() / 2 - at);
+            ts.put(in.data() + at * 2, n);
+            while (ts.available() >= 1024) {
+                double pos = ts.position();
+                if (pos < lastPos) positionsOk = false;
+                lastPos = pos;
+                ts.take(buf.data(), 1024);
+                out.insert(out.end(), buf.begin(), buf.end());
+            }
+        }
+        double outFrames = out.size() / 2.0;
+        double expected = (in.size() / 2.0) / speed;
+        // Everything but the last piece or two comes out, at the requested rate.
+        CHECK(outFrames > expected * 0.9 && outFrames <= expected * 1.02);
+        CHECK(positionsOk);
+        // The clock position tracks the input consumed: about outFrames * speed.
+        CHECK(std::fabs(ts.position() - outFrames * speed) < rate * 0.1);
+        // The splices keep the tone's level (no dropouts or clipping).
+        double sum = 0;
+        int16_t peak = 0;
+        for (size_t i = 0; i < out.size(); i += 2) {
+            sum += (double)out[i] * out[i];
+            peak = std::max<int16_t>(peak, (int16_t)std::abs(out[i]));
+        }
+        double rms = std::sqrt(sum / (out.size() / 2));
+        CHECK(rms > 8000 * 0.62 && rms < 8000 * 0.78);
+        CHECK(peak <= 8200);
+    }
+    TimeStretch ts;
+    ts.setSampleRate(rate);
+    ts.setSpeed(9);
+    CHECK(ts.speed() == 2.0);
+    ts.setSpeed(0.1);
+    CHECK(ts.speed() == 0.25);
+    ts.put(in.data(), 4096);
+    ts.clear();
+    CHECK(ts.available() == 0 && ts.position() == 0);
 }
 
 static void test_innertube_body() {
@@ -735,6 +894,7 @@ static void test_for_you() {
 }
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0);  // so a crash shows which test it was in
     if (argc > 1) g_dir = argv[1];
     test_util();
     test_search();
@@ -752,6 +912,8 @@ int main(int argc, char** argv) {
     test_fmp4();
     test_captions();
     test_store();
+    test_text();
+    test_stretch();
     test_innertube_body();
     printf("\n%d passed, %d failed", g_pass, g_fail);
     if (g_skip) printf(", %d skipped for missing fixtures", g_skip);

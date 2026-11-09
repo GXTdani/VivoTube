@@ -55,6 +55,10 @@ enum class Icon {
     Liked,
     ChevronDown,
     Refresh,
+    Speed,
+    AddToQueue,
+    PlayNext,
+    NotInterested,
 };
 
 // Draws an icon centered at (cx, cy), `size` pixels square. `bg` fills cut-outs in filled icons.

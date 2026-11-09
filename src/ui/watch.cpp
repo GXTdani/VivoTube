@@ -34,6 +34,18 @@ std::string friendly_status(const PlayerInfo& p) {
     return r;
 }
 
+// Playback speed lasts for the session, across videos, like on the web.
+double g_speed = 1.0;
+const double kSpeeds[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0};
+
+std::string speed_label(double s) {
+    if (s == 1.0) return "Normal";
+    std::string t = str_printf("%.2f", s);
+    while (t.back() == '0') t.pop_back();
+    if (t.back() == '.') t.pop_back();
+    return t + "x";
+}
+
 }  // namespace
 
 class WatchScreen : public Screen {
@@ -55,6 +67,7 @@ public:
         related_.rowH = 82;
         related_.emptyIcon = Icon::Playlist;
         related_.emptyTitle = "No related videos";
+        related_.hide = [](const Item& it) { return g_app->store.hidden(it); };
         related_.loading = true;
         chapterList_.rowH = 56;
         desc_.list.focused = false;
@@ -87,11 +100,35 @@ public:
         Player::State st = player_ ? player_->state() : Player::State::Loading;
         if (player_ && (st == Player::State::Playing || st == Player::State::Buffering)) g_app->keepAwake();
         tickProgress(now, st);
-        countdown_ = false;  // autoplay waits until the page is full size again
+        if (countdown_) {  // ended with another video queued: the mini player moves on to it
+            countdown_ = false;
+            playQueue(qi_ + 1, true);
+        }
     }
 
     void togglePlay() override { togglePause(); }
     std::string videoId() const override { return item_.id; }
+
+    // "Play next in queue" / "Add to queue": starts a queue with this video if there is none.
+    bool enqueue(const Item& it, bool next) override {
+        if (it.id == item_.id) return false;
+        if (queue_.empty()) {
+            queue_.push_back(item_);
+            qi_ = 0;
+            tabs_.insert(tabs_.begin(), TAB_QUEUE);
+            tab_++;
+        }
+        for (size_t k = qi_ + 1; k < queue_.size();) {
+            if (queue_[k].id == it.id) queue_.erase(queue_.begin() + k);
+            else k++;
+        }
+        size_t at = next ? (size_t)qi_ + 1 : queue_.size();
+        queue_.insert(queue_.begin() + at, it);
+        int sel = queueFeed_.sel();
+        queueFeed_.items = queue_;
+        queueFeed_.setSel(std::max(0, std::min(sel, (int)queue_.size() - 1)));
+        return true;
+    }
 
     void drawMini(const Rect& r, bool focused) override {
         Rect v{r.x, r.y, r.w, MINI_VIDEO_H};
@@ -161,7 +198,8 @@ public:
         }
         if (in.pressed(BTN_SQUARE)) {
             in.consume(BTN_SQUARE);
-            if (!full_ && focus_ == F_PANEL && panelSelectedItem()) g_app->itemMenu(*panelSelectedItem());
+            if (!full_ && focus_ == F_PANEL && panelSelectedItem())
+                g_app->itemMenu(*panelSelectedItem(), {}, tabs_[tab_] == TAB_RELATED);
             else optionsMenu();
             return;
         }
@@ -379,6 +417,7 @@ private:
             playError_ = player_->error().empty() ? "Couldn't start the player." : player_->error();
             player_.reset();
         }
+        if (player_) player_->setSpeed(g_speed);
         ended_ = false;
     }
 
@@ -451,10 +490,11 @@ private:
         return true;
     }
 
-    void playQueue(int i) {
+    void playQueue(int i, bool mini = false) {
         if (i < 0 || i >= (int)queue_.size()) return;
         std::vector<Item> q = queue_;
-        g_app->openVideo(q[i], q, i);  // replaces this screen
+        if (mini) g_app->playInMini(q[i], q, i);
+        else g_app->openVideo(q[i], q, i);  // replaces this screen
     }
 
     void togglePause() {
@@ -679,6 +719,8 @@ private:
         std::vector<MenuAction> acts;
         if (haveStreams_)
             acts.push_back({"Quality  " + str_printf("%dp", quality_of(vfmt_)), Icon::Settings, guarded([this] { qualityMenu(); })});
+        if (haveStreams_)
+            acts.push_back({"Playback speed  " + speed_label(g_speed), Icon::Speed, guarded([this] { speedMenu(); })});
         if (!info_.captions.empty()) {
             std::string cur = capsOn_ && capTrack_ >= 0 ? captionName(capTrack_) : "Off";
             acts.push_back({"Captions  " + cur, Icon::Captions, guarded([this] { captionsMenu(); })});
@@ -700,6 +742,21 @@ private:
             acts.push_back({"Go to channel", Icon::Account, [cid, cname] { g_app->openChannel(cid, cname); }});
         }
         g_app->showActions("", acts);
+    }
+
+    void speedMenu() {
+        std::vector<std::string> labels;
+        int cur = 3;
+        for (int i = 0; i < 8; i++) {
+            labels.push_back(speed_label(kSpeeds[i]));
+            if (kSpeeds[i] == g_speed) cur = i;
+        }
+        g_app->showMenu("Playback speed", labels, guarded([this](int i) {
+                            g_speed = kSpeeds[i];
+                            if (player_) player_->setSpeed(g_speed);
+                            g_app->toast("Playback speed " + speed_label(g_speed));
+                        }),
+                        cur, cur);
     }
 
     void chaptersMenu() {
@@ -832,6 +889,8 @@ private:
             if (watchLoaded_) comments_.start(watch_.commentsContinuation, watch_.commentSorts, watch_.commentCount);
         }
     }
+
+    void hiddenChanged() override { related_.prune(); }
 
     const Item* panelSelectedItem() const {
         PanelTab t = tabs_[tab_];
@@ -967,8 +1026,8 @@ private:
         } else {
             desc_.list.focused = false;
             desc_.list.draw(PANEL_LIST, [&](int i, const Rect& r, bool) {
-                if (desc_.bold[i]) g_gfx.textBold(r.x + 14, r.y, col::text, 0.7f, desc_.lines[i]);
-                else g_gfx.text(r.x + 14, r.y, col::text, 0.7f, desc_.lines[i]);
+                g_gfx.textLine(r.x + 14, r.y, PANEL_W - 28, col::text, 0.7f, desc_.lines[i],
+                               desc_.bold[i] ? W_MEDIUM : W_REGULAR);
             });
             if (foc) g_gfx.rect(PANEL_X - 4, PANEL_LIST.y, 2, PANEL_LIST.h, col::focus);
         }

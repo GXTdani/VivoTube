@@ -213,10 +213,16 @@ struct Feed {
     std::string shelfTitle = "Shorts";
     int shelfRow = 2, shelfAt = 3, shelfSel = 0;
     bool showShelf = true;
+    // Items for which this returns true are left out of appended pages and removed by prune()
+    // (recommendations the user marked "Not interested").
+    std::function<bool(const Item&)> hide;
 
     void reset();
     // Appends a page; returns true if it brought new items.
     bool append(const Page& p);
+    // Removes the items (and shelf cards) `hide` now matches, keeping the highlight in place.
+    // Returns how many were removed.
+    int prune();
     bool gridLike() const { return style == FeedStyle::Grid || style == FeedStyle::Shorts; }
     int sel() const { return gridLike() ? grid.sel : list.sel; }
     void setSel(int i);

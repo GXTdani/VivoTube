@@ -22,6 +22,7 @@ std::string replace_all(std::string s, const std::string& from, const std::strin
 // UTF-8 helpers. Byte offsets always land on code point boundaries.
 size_t utf8_next(const std::string& s, size_t i);          // index of the next code point
 uint32_t utf8_decode(const std::string& s, size_t i);      // code point starting at i
+void utf8_append(std::string& out, uint32_t cp);           // encodes cp (invalid ones as U+FFFD)
 bool is_cjk(uint32_t cp);                                  // can break between these characters
 
 // "1:02:03" / "12:45" -> seconds, or -1.

@@ -15,8 +15,8 @@ set(VITA_APP_NAME "VivoTube")
 set(VITA_TITLEID "VIVO00001")
 # Keep these two in step: VITA_VERSION is the LiveArea's "XX.YY", VT_VERSION the release tag
 # (without the "v") that the auto-updater compares against GitHub's latest release.
-set(VITA_VERSION "01.20")
-set(VT_VERSION "1.2.0")
+set(VITA_VERSION "01.30")
+set(VT_VERSION "1.3.0")
 
 # Optional, not checked in: a Google OAuth client to build in (see secrets.cmake.example).
 set(VT_GOOGLE_CLIENT_ID "")
@@ -34,13 +34,16 @@ file(GLOB UI_SOURCES src/ui/*.cpp)
 
 add_executable(VivoTube src/main.cpp ${CORE_SOURCES} ${VITA_SOURCES} ${UI_SOURCES})
 
-target_include_directories(VivoTube PRIVATE src src/core third_party/rapidjson $ENV{VITASDK}/arm-vita-eabi/include/freetype2)
-target_compile_definitions(VivoTube PRIVATE VT_VERSION="${VT_VERSION}" VT_VITA=1
+target_include_directories(VivoTube PRIVATE src src/core third_party/rapidjson $ENV{VITASDK}/arm-vita-eabi/include/freetype2
+  $ENV{VITASDK}/arm-vita-eabi/include/harfbuzz $ENV{VITASDK}/arm-vita-eabi/include/fribidi)
+target_compile_definitions(VivoTube PRIVATE VT_VERSION="${VT_VERSION}" VT_VITA=1 FRIBIDI_LIB_STATIC
   VT_GOOGLE_CLIENT_ID="${VT_GOOGLE_CLIENT_ID}" VT_GOOGLE_CLIENT_SECRET="${VT_GOOGLE_CLIENT_SECRET}")
 
 target_link_libraries(VivoTube
   vita2d
   jpeg
+  harfbuzz
+  fribidi
   freetype
   png16
   curl
@@ -86,6 +89,13 @@ target_link_libraries(VivoTube
   gcc
 )
 
+# Noto Sans for the scripts Roboto and the Vita's fonts lack (assets/fonts/noto/, OFL 1.1).
+file(GLOB NOTO_FONTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/fonts/noto/*)
+set(NOTO_FILES "")
+foreach(f ${NOTO_FONTS})
+  list(APPEND NOTO_FILES FILE ${f} ${f})
+endforeach()
+
 vita_create_self(eboot.bin VivoTube UNSAFE)
 vita_create_vpk(VivoTube.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
@@ -100,6 +110,7 @@ vita_create_vpk(VivoTube.vpk ${VITA_TITLEID} eboot.bin
   FILE assets/fonts/Roboto-Medium.ttf assets/fonts/Roboto-Medium.ttf
   FILE assets/fonts/Roboto-Bold.ttf assets/fonts/Roboto-Bold.ttf
   FILE assets/fonts/LICENSE-Roboto.txt assets/fonts/LICENSE-Roboto.txt
+  ${NOTO_FILES}
   FILE assets/emoji/emoji.pak assets/emoji/emoji.pak
   FILE assets/emoji/LICENSE-Twemoji.txt assets/emoji/LICENSE-Twemoji.txt
 )

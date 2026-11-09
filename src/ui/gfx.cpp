@@ -2,6 +2,10 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
+#include <fribidi.h>
+#include <hb-ot.h>
+#include <hb.h>
 #include <vita2d.h>
 
 #include <algorithm>
@@ -9,34 +13,63 @@
 #include <cstring>
 
 #include "../core/emoji.h"
+#include "../core/text.h"
 #include "../core/util.h"
 
 namespace vt {
 
 Gfx g_gfx;
 
-// ---------------------------------------------------------------- Roboto via FreeType
+// ---------------------------------------------------------------- fonts
 
 namespace {
 constexpr float kPxPerScale = 18.0f;  // Roboto pixel size at scale 1.0
 constexpr int kAtlasW = 1024, kAtlasH = 1024;
-const char* const kFontFiles[3] = {"app0:assets/fonts/Roboto-Regular.ttf", "app0:assets/fonts/Roboto-Medium.ttf",
-                                   "app0:assets/fonts/Roboto-Bold.ttf"};
+constexpr int kNoto = kNotoLast - kNotoFirst + 1;
+
+// The font table: Roboto in three weights, a Regular and a Medium face for each bundled Noto
+// family, then the Vita's own fonts for Japanese, Chinese and Korean (regular and bold each).
+enum : int {
+    F_ROBOTO = 0,
+    F_NOTO = 3,
+    F_JPN = F_NOTO + 2 * kNoto,
+    F_CN = F_JPN + 2,
+    F_KR = F_CN + 2,
+    F_COUNT = F_KR + 2,
+};
+constexpr int F_PGF = -1;  // no font here has the character: the system's PGF font draws it
+
+const char* const kRoboto[3] = {"app0:assets/fonts/Roboto-Regular.ttf", "app0:assets/fonts/Roboto-Medium.ttf",
+                                "app0:assets/fonts/Roboto-Bold.ttf"};
+// sa0:data/font/pvf/ holds plain OpenType and TrueType files: Rodin (Japanese, regular and
+// bold), DynaFont Hei (Chinese) and the Korean system font.
+const char* const kSystem[6] = {"jpn0", "jpn2", "cn0", "cn0", "kr0", "kr2"};
+
+int noto_face(Script s, int bold) { return F_NOTO + 2 * ((int)s - kNotoFirst) + (bold ? 1 : 0); }
 }  // namespace
 
-// Glyphs are rendered on demand into one 8-bit atlas and drawn as one batch of quads per string.
+// Glyphs from every face are rendered on demand into one 8-bit atlas, so a line of text is one
+// batch of quads whatever mix of scripts it holds.
 struct FontEngine {
+    struct Face {
+        std::string path;
+        bool memory = true;  // read into RAM (HarfBuzz needs that); the big system fonts are streamed
+        float embolden = 0;  // synthetic bold, as a fraction of the pixel size
+        bool tried = false;
+        FT_Face ft = nullptr;
+        std::string data;
+        hb_font_t* hb = nullptr;
+        int upem = 1000;
+        int sizePx = 0;
+    };
     struct Glyph {
         int16_t ax = 0, ay = 0, w = 0, h = 0, left = 0, top = 0;
         float adv = 0;
-        bool missing = false;  // not in Roboto: the system font draws it
-        bool placed = false;   // bitmap is in the atlas
+        bool placed = false;  // bitmap is in the atlas
     };
 
     FT_Library lib = nullptr;
-    FT_Face face[3] = {nullptr, nullptr, nullptr};
-    std::string data[3];
-    int sizeOf[3] = {0, 0, 0};
+    Face faces[F_COUNT];
     float ascEm = 0.928f, descEm = 0.244f;
     vita2d_texture* atlas = nullptr;
     uint8_t* pix = nullptr;
@@ -44,18 +77,35 @@ struct FontEngine {
     int penX = 1, penY = 1, shelfH = 0;
     bool full = false;
     uint8_t gamma[256];
-    std::unordered_map<uint32_t, Glyph> glyphs;
+    std::unordered_map<uint32_t, Glyph> glyphs;  // face << 24 | px << 16 | glyph index
+    std::unordered_map<uint32_t, uint32_t> picks;  // (cp, weight, japanese) -> (face + 1) << 16 | glyph index
+    hb_buffer_t* buf = nullptr;
 
     bool init() {
         if (FT_Init_FreeType(&lib)) return false;
-        for (int i = 0; i < 3; i++) {
-            if (!read_file(kFontFiles[i], data[i]) ||
-                FT_New_Memory_Face(lib, (const FT_Byte*)data[i].data(), (FT_Long)data[i].size(), 0, &face[i])) {
-                VT_LOG("font: cannot load %s", kFontFiles[i]);
-                return false;
+        for (int i = 0; i < 3; i++) faces[F_ROBOTO + i].path = kRoboto[i];
+        for (int s = kNotoFirst; s <= kNotoLast; s++) {
+            Script sc = (Script)s;
+            Face& r = faces[noto_face(sc, 0)];
+            Face& m = faces[noto_face(sc, 1)];
+            r.path = str_printf("app0:assets/fonts/noto/NotoSans%s-Regular.ttf", noto_family(sc));
+            if (noto_has_medium(sc)) {
+                m.path = str_printf("app0:assets/fonts/noto/NotoSans%s-Medium.ttf", noto_family(sc));
+            } else {
+                m.path = r.path;
+                m.embolden = 0.035f;
             }
         }
-        FT_Face f = face[0];
+        for (int i = 0; i < 6; i++) {
+            Face& f = faces[F_JPN + i];
+            f.path = str_printf("sa0:data/font/pvf/%s.pvf", kSystem[i]);
+            f.memory = false;
+        }
+        faces[F_CN + 1].embolden = 0.03f;
+        for (int i = 0; i < 3; i++) {
+            if (!face(F_ROBOTO + i)) return false;
+        }
+        FT_Face f = faces[F_ROBOTO].ft;
         if (f->units_per_EM > 0) {
             ascEm = (float)f->ascender / f->units_per_EM;
             descEm = (float)-f->descender / f->units_per_EM;
@@ -68,6 +118,7 @@ struct FontEngine {
         memset(pix, 0, (size_t)stride * kAtlasH);
         // Light text on a dark page reads thin with linear coverage; lift the midtones a little.
         for (int i = 0; i < 256; i++) gamma[i] = (uint8_t)std::lround(255.0 * std::pow(i / 255.0, 0.82));
+        buf = hb_buffer_create();
         return true;
     }
 
@@ -77,12 +128,108 @@ struct FontEngine {
             vita2d_free_texture(atlas);
         }
         atlas = nullptr;
-        for (auto& f : face) {
-            if (f) FT_Done_Face(f);
-            f = nullptr;
+        if (buf) hb_buffer_destroy(buf);
+        buf = nullptr;
+        for (auto& f : faces) {
+            if (f.hb) hb_font_destroy(f.hb);
+            if (f.ft) FT_Done_Face(f.ft);
+            f.hb = nullptr;
+            f.ft = nullptr;
+            std::string().swap(f.data);
+            f.tried = false;
         }
         if (lib) FT_Done_FreeType(lib);
         lib = nullptr;
+    }
+
+    // The face, loading it the first time it is needed; nullptr if it can't be loaded.
+    Face* face(int i) {
+        if (i < 0 || i >= F_COUNT) return nullptr;
+        Face& f = faces[i];
+        if (!f.tried) {
+            f.tried = true;
+            bool ok;
+            if (f.memory) {
+                ok = read_file(f.path, f.data) && !FT_New_Memory_Face(lib, (const FT_Byte*)f.data.data(),
+                                                                      (FT_Long)f.data.size(), 0, &f.ft);
+            } else {
+                ok = !FT_New_Face(lib, f.path.c_str(), 0, &f.ft);
+            }
+            if (!ok) {
+                VT_LOG("font: cannot load %s", f.path.c_str());
+                f.ft = nullptr;
+                std::string().swap(f.data);
+            } else {
+                f.upem = f.ft->units_per_EM > 0 ? f.ft->units_per_EM : 1000;
+                if (f.memory) {
+                    hb_blob_t* blob = hb_blob_create(f.data.data(), (unsigned)f.data.size(), HB_MEMORY_MODE_READONLY,
+                                                     nullptr, nullptr);
+                    hb_face_t* hf = hb_face_create(blob, 0);
+                    f.hb = hb_font_create(hf);
+                    hb_font_set_scale(f.hb, f.upem, f.upem);
+                    hb_face_destroy(hf);
+                    hb_blob_destroy(blob);
+                }
+                if (i >= F_NOTO) VT_LOG("font: loaded %s", f.path.c_str());
+            }
+        }
+        return f.ft ? &f : nullptr;
+    }
+
+    // The glyph for cp, or 0. HarfBuzz's cmap reader is used where there is one: the Vita build
+    // of FreeType only exposes one cmap subtable of the Noto Indic fonts and misses their letters.
+    unsigned index(int fi, uint32_t cp) {
+        Face* f = face(fi);
+        if (!f) return 0;
+        if (f->hb) {
+            hb_codepoint_t g = 0;
+            return hb_font_get_nominal_glyph(f->hb, cp, &g) ? (unsigned)g : 0;
+        }
+        return FT_Get_Char_Index(f->ft, cp);
+    }
+
+    // The face that draws cp at weight w (Han characters prefer the Japanese font in Japanese
+    // text, the Chinese one otherwise), and its glyph index. Face F_PGF when none has it.
+    int pick(uint32_t cp, int w, bool jp, unsigned* gid) {
+        uint32_t key = (cp & 0x1FFFFF) | ((uint32_t)w << 21) | ((uint32_t)jp << 23);
+        auto it = picks.find(key);
+        if (it != picks.end()) {
+            *gid = it->second & 0xFFFF;
+            return (int)(it->second >> 16) - 1;
+        }
+        int b = w > 0 ? 1 : 0;
+        int c[3] = {-1, -1, -1};
+        Script s = script_of(cp);
+        switch (s) {
+        case Script::Common:
+            c[0] = F_ROBOTO + w, c[1] = F_JPN + b, c[2] = F_CN + b;
+            break;
+        case Script::Kana:
+            c[0] = F_JPN + b, c[1] = F_CN + b;
+            break;
+        case Script::Han:
+        case Script::CjkSymbol:
+            c[0] = jp ? F_JPN + b : F_CN + b, c[1] = jp ? F_CN + b : F_JPN + b;
+            break;
+        case Script::Hangul:
+            c[0] = F_KR + b, c[1] = F_CN + b;
+            break;
+        default:
+            c[0] = noto_face(s, b), c[1] = F_ROBOTO + w, c[2] = F_JPN + b;
+            break;
+        }
+        int r = F_PGF;
+        unsigned g = 0;
+        for (int f : c) {
+            if (f >= 0 && (g = index(f, cp)) != 0) {
+                r = f;
+                break;
+            }
+        }
+        if (r == F_PGF) g = 0;
+        picks[key] = ((uint32_t)(r + 1) << 16) | (g & 0xFFFF);
+        *gid = g;
+        return r;
     }
 
     void recycle() {
@@ -96,35 +243,34 @@ struct FontEngine {
         VT_LOG("font: atlas recycled");
     }
 
-    const Glyph& get(int w, int px, uint32_t cp) {
-        uint32_t key = ((uint32_t)w << 30) | ((uint32_t)px << 21) | (cp & 0x1FFFFF);
+    // A glyph's bitmap in the atlas and its advance at px pixels.
+    const Glyph* glyph(int fi, unsigned gid, int px) {
+        uint32_t key = ((uint32_t)fi << 24) | ((uint32_t)px << 16) | (gid & 0xFFFF);
         auto it = glyphs.find(key);
-        if (it != glyphs.end() && (it->second.placed || it->second.missing || it->second.w == 0 || full))
-            return it->second;
+        if (it != glyphs.end() && (it->second.placed || it->second.w == 0 || full)) return &it->second;
+        Face* f = face(fi);
+        if (!f) return nullptr;
         Glyph& g = glyphs[key];
         g = Glyph();
-        FT_Face f = face[w];
-        FT_UInt idx = FT_Get_Char_Index(f, cp);
-        if (idx == 0) {
-            g.missing = true;
-            return g;
+        if (f->sizePx != px) {
+            FT_Set_Pixel_Sizes(f->ft, 0, px);
+            f->sizePx = px;
         }
-        if (sizeOf[w] != px) {
-            FT_Set_Pixel_Sizes(f, 0, px);
-            sizeOf[w] = px;
-        }
-        if (FT_Load_Glyph(f, idx, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT)) {
-            g.missing = true;
-            return g;
-        }
-        FT_GlyphSlot sl = f->glyph;
-        const FT_Bitmap& bm = sl->bitmap;
+        if (FT_Load_Glyph(f->ft, gid, FT_LOAD_TARGET_LIGHT | FT_LOAD_NO_BITMAP)) return &g;
+        FT_GlyphSlot sl = f->ft->glyph;
         g.adv = sl->linearHoriAdvance / 65536.0f;
+        if (f->embolden > 0 && sl->format == FT_GLYPH_FORMAT_OUTLINE) {
+            FT_Pos str = (FT_Pos)std::lround(px * f->embolden * 64);
+            FT_Outline_EmboldenXY(&sl->outline, str, str);
+            if (g.adv > 0) g.adv += px * f->embolden;
+        }
+        if (sl->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(sl, FT_RENDER_MODE_LIGHT)) return &g;
+        const FT_Bitmap& bm = sl->bitmap;
         g.left = (int16_t)sl->bitmap_left;
         g.top = (int16_t)sl->bitmap_top;
         g.w = (int16_t)bm.width;
         g.h = (int16_t)bm.rows;
-        if (g.w == 0 || g.h == 0) return g;
+        if (g.w == 0 || g.h == 0) return &g;
         if (penX + g.w + 1 > kAtlasW) {
             penX = 1;
             penY += shelfH + 1;
@@ -132,7 +278,7 @@ struct FontEngine {
         }
         if (penY + g.h + 1 > kAtlasH || g.w + 2 > kAtlasW) {
             full = true;  // drawn from the next frame on, after the atlas is recycled
-            return g;
+            return &g;
         }
         for (int r = 0; r < g.h; r++) {
             const uint8_t* src = bm.buffer + r * bm.pitch;
@@ -144,7 +290,7 @@ struct FontEngine {
         g.placed = true;
         penX += g.w + 1;
         shelfH = std::max(shelfH, (int)g.h);
-        return g;
+        return &g;
     }
 };
 
@@ -252,12 +398,217 @@ struct EmojiAtlas {
     }
 };
 
+// ---------------------------------------------------------------- shaped lines
+
+// A line of complex text (right-to-left, Indic, Thai...) after bidi reordering and shaping:
+// glyphs, emoji and PGF fallbacks in visual order, positioned from the line's start in pixels.
+struct ShapedLine {
+    enum Kind : uint8_t { GLYPH, EMOJI, PGF };
+    struct Item {
+        Kind kind;
+        int16_t face;
+        uint32_t id;  // glyph index, emoji pack index, or code point
+        float x, y;   // y: offset above the baseline
+    };
+    std::vector<Item> items;
+    float width = 0;
+};
+
+struct TextCache {
+    std::unordered_map<std::string, ShapedLine> lines;
+    std::unordered_map<std::string, std::string> ellipsized;
+};
+
 namespace {
 int px_for(float scale) {
     int px = (int)std::lround(scale * kPxPerScale);
     return px < 6 ? 6 : (px > 200 ? 200 : px);
 }
+
+// Characters that join the font run they follow when that font has them: spaces, digits and
+// punctuation, so "مرحبا، 2024" stays in one Arabic run.
+bool inherits_font(uint32_t cp) {
+    return (cp < 0x80 && !((cp | 0x20) >= 'a' && (cp | 0x20) <= 'z')) || (cp >= 0xA0 && cp <= 0xBF) ||
+           (cp >= 0x2000 && cp <= 0x206F) || cp == 0xFFFC;
+}
+
+// Base direction from the first strong character: true for right-to-left.
+bool first_strong_rtl(const std::string& s) {
+    for (size_t i = 0; i < s.size(); i = utf8_next(s, i)) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) {
+            if ((c | 0x20) >= 'a' && (c | 0x20) <= 'z') return false;
+            continue;
+        }
+        FriBidiCharType t = fribidi_get_bidi_type(utf8_decode(s, i));
+        if (FRIBIDI_IS_STRONG(t) && FRIBIDI_IS_LETTER(t)) return FRIBIDI_IS_RTL(t) != 0;
+    }
+    return false;
+}
 }  // namespace
+
+// Shapes one line: the bidi algorithm splits it into level runs, the runs are put in visual
+// order (rule L2), each run is split where the font changes, and every piece is shaped with
+// HarfBuzz in its run's direction.
+static void shape_line(FontEngine& ft, EmojiAtlas* emoji, vita2d_pgf* pgf, const std::string& s, int w, int px,
+                       ShapedLine& out) {
+    out.items.clear();
+    out.width = 0;
+    bool jp = has_kana(s);
+    std::vector<uint32_t> cps;
+    std::vector<int> emo;  // emoji pack index, or -1
+    cps.reserve(s.size());
+    emo.reserve(s.size());
+    for (size_t i = 0, next = 0; i < s.size(); i = next) {
+        next = utf8_next(s, i);
+        uint32_t cp = utf8_decode(s, i);
+        if (cp == '\n' || cp == '\r') continue;
+        if (cp == '\t' || cp == 0xA0) cp = ' ';
+        if (emoji && cp >= '#') {
+            size_t end = 0;
+            bool textStyle = false;
+            int idx = emoji->pack.match(s, i, &end, &textStyle);
+            if (idx >= 0 && !textStyle) {
+                cps.push_back(0xFFFC);  // object replacement: a neutral for the bidi algorithm
+                emo.push_back(idx);
+                next = end;
+                continue;
+            }
+        }
+        // Joiners stay for the shaper; other emoji components and unknown pictographs go.
+        if (cp != 0x200C && cp != 0x200D && (is_emoji_component(cp) || is_pictograph(cp))) continue;
+        cps.push_back(fold_styled(cp));
+        emo.push_back(-1);
+    }
+    const int n = (int)cps.size();
+    if (n == 0) return;
+
+    std::vector<FriBidiCharType> types(n);
+    std::vector<FriBidiBracketType> brackets(n);
+    std::vector<FriBidiLevel> levels(n, 0);
+    fribidi_get_bidi_types(cps.data(), n, types.data());
+    fribidi_get_bracket_types(cps.data(), n, types.data(), brackets.data());
+    FriBidiParType base = FRIBIDI_PAR_ON;
+    if (!fribidi_get_par_embedding_levels_ex(types.data(), brackets.data(), n, &base, levels.data()))
+        std::fill(levels.begin(), levels.end(), 0);
+    // Rule L1: trailing whitespace goes back to the paragraph level.
+    FriBidiLevel baseLevel = FRIBIDI_IS_RTL(base) ? 1 : 0;
+    for (int k = n - 1; k >= 0 && (FRIBIDI_IS_EXPLICIT_OR_BN_OR_WS(types[k]) || FRIBIDI_IS_ISOLATE(types[k])); k--)
+        levels[k] = baseLevel;
+
+    struct Run {
+        int start, end, level;
+    };
+    std::vector<Run> runs;
+    for (int k = 0; k < n; k++) {
+        if (runs.empty() || runs.back().level != levels[k]) runs.push_back({k, k + 1, levels[k]});
+        else runs.back().end = k + 1;
+    }
+    int maxLevel = 0, minOdd = 255;
+    for (auto& r : runs) {
+        maxLevel = std::max(maxLevel, r.level);
+        if (r.level & 1) minOdd = std::min(minOdd, r.level);
+    }
+    std::vector<int> order(runs.size());
+    for (size_t k = 0; k < order.size(); k++) order[k] = (int)k;
+    for (int lv = maxLevel; lv >= minOdd && lv > 0; lv--) {
+        for (size_t a = 0; a < order.size();) {
+            if (runs[order[a]].level < lv) {
+                a++;
+                continue;
+            }
+            size_t b = a;
+            while (b < order.size() && runs[order[b]].level >= lv) b++;
+            std::reverse(order.begin() + a, order.begin() + b);
+            a = b;
+        }
+    }
+
+    const float es = std::round(px * 1.12f), eAdv = es + std::round(px * 0.12f);
+    const float pgfScale = px / 18.5f;
+    float pen = 0;
+    auto add = [&](ShapedLine::Kind k, int face, uint32_t id, float x, float y) {
+        out.items.push_back({k, (int16_t)face, id, x, y});
+    };
+    struct Seg {
+        int start, end, face;  // face -2: one emoji
+    };
+    std::vector<Seg> segs;
+    for (int ri : order) {
+        const Run& run = runs[ri];
+        const bool rtl = run.level & 1;
+        // Font runs, in logical order.
+        segs.clear();
+        for (int k = run.start; k < run.end; k++) {
+            uint32_t c = cps[k];
+            int f;
+            unsigned gid = 0;
+            int cur = segs.empty() ? -3 : segs.back().face;
+            if (emo[k] >= 0) {
+                f = -2;
+                segs.push_back({k, k + 1, f});
+                continue;
+            }
+            if (cur >= 0 && (is_invisible(c) || ((is_mark(c) || inherits_font(c)) && ft.index(cur, c))))
+                f = cur;
+            else if (is_invisible(c))
+                f = F_ROBOTO + w;
+            else
+                f = ft.pick(c, w, jp, &gid);
+            if (cur == f) segs.back().end = k + 1;
+            else segs.push_back({k, k + 1, f});
+        }
+        if (rtl) std::reverse(segs.begin(), segs.end());
+        for (const Seg& sg : segs) {
+            if (sg.face == -2) {
+                add(ShapedLine::EMOJI, 0, (uint32_t)emo[sg.start], pen, 0);
+                pen += eAdv;
+                continue;
+            }
+            FontEngine::Face* face = sg.face >= 0 ? ft.face(sg.face) : nullptr;
+            if (face && face->hb) {
+                hb_buffer_clear_contents(ft.buf);
+                hb_buffer_add_utf32(ft.buf, cps.data(), n, (unsigned)sg.start, sg.end - sg.start);
+                hb_buffer_set_direction(ft.buf, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+                hb_buffer_guess_segment_properties(ft.buf);
+                int flags = HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES;
+                if (sg.start == 0) flags |= HB_BUFFER_FLAG_BOT;
+                if (sg.end == n) flags |= HB_BUFFER_FLAG_EOT;
+                hb_buffer_set_flags(ft.buf, (hb_buffer_flags_t)flags);
+                hb_shape(face->hb, ft.buf, nullptr, 0);
+                unsigned gn = 0;
+                hb_glyph_info_t* gi = hb_buffer_get_glyph_infos(ft.buf, &gn);
+                hb_glyph_position_t* gp = hb_buffer_get_glyph_positions(ft.buf, &gn);
+                const float k = (float)px / face->upem;
+                const float extra = face->embolden * px;
+                for (unsigned j = 0; j < gn; j++) {
+                    add(ShapedLine::GLYPH, sg.face, gi[j].codepoint, pen + gp[j].x_offset * k, gp[j].y_offset * k);
+                    pen += gp[j].x_advance * k + (gp[j].x_advance > 0 ? extra : 0);
+                }
+                continue;
+            }
+            // A streamed system font (no shaping needed for its scripts) or the PGF fallback:
+            // one character at a time, reversed in right-to-left runs.
+            for (int j = 0; j < sg.end - sg.start; j++) {
+                int k = rtl ? sg.end - 1 - j : sg.start + j;
+                uint32_t c = cps[k];
+                if (is_invisible(c)) continue;
+                if (face) {
+                    unsigned gid = ft.index(sg.face, c);
+                    const FontEngine::Glyph* g = ft.glyph(sg.face, gid, px);
+                    add(ShapedLine::GLYPH, sg.face, gid, pen, 0);
+                    if (g) pen += g->adv;
+                } else if (pgf) {
+                    std::string u;
+                    utf8_append(u, c);
+                    add(ShapedLine::PGF, F_PGF, c, pen, 0);
+                    pen += vita2d_pgf_text_width(pgf, pgfScale, u.c_str());
+                }
+            }
+        }
+    }
+    out.width = pen;
+}
 
 bool Gfx::init() {
     font_ = vita2d_load_default_pgf();
@@ -268,6 +619,7 @@ bool Gfx::init() {
         ft_ = nullptr;
     }
     if (!font_ && !ft_) return false;
+    cache_ = new TextCache();
     if (ft_) {
         emoji_ = new EmojiAtlas();
         if (!emoji_->init()) {
@@ -277,7 +629,7 @@ bool Gfx::init() {
         }
         lineH_ = (ft_->ascEm + ft_->descEm) * kPxPerScale;
         ascent_ = ft_->ascEm * kPxPerScale;
-        VT_LOG("gfx: roboto, line height %.1f", lineH_);
+        VT_LOG("gfx: roboto, line height %.1f, harfbuzz %s", lineH_, hb_version_string());
     } else {
         int h = vita2d_pgf_text_height(font_, 1.0f, "Ag");
         float glyph = h > 4 ? (float)h : 20.0f;
@@ -299,6 +651,8 @@ void Gfx::shutdown() {
         delete ft_;
         ft_ = nullptr;
     }
+    delete cache_;
+    cache_ = nullptr;
     if (font_) vita2d_free_pgf(font_);
     font_ = nullptr;
 }
@@ -308,9 +662,12 @@ void Gfx::beginFrame() {
     if (emoji_) emoji_->beginFrame();
 }
 
+bool Gfx::rtl(const std::string& s) const { return first_strong_rtl(s); }
 
-// Lays out one line. Draws it when `draw` is set; returns the advance width.
-float Gfx::measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color) {
+// Lays out one line. Draws it when `draw` is set; returns the advance width. Complex lines are
+// shaped once and kept (`keep`), or shaped and dropped for the trial widths wrap() measures.
+float Gfx::measure(const std::string& s, float scale, int weight, bool draw, float x, float y, uint32_t color,
+                   bool keep) {
     if (s.empty()) return 0;
     if (!ft_) {
         int base = (int)(y + ascent_ * scale);
@@ -327,13 +684,94 @@ float Gfx::measure(const std::string& s, float scale, int weight, bool draw, flo
     float start = pen;
     // Center the rounded size's ascent + descent in the nominal line box.
     float baseline = std::round(y + (lineH_ * scale - (ft_->ascEm + ft_->descEm) * px) * 0.5f + ft_->ascEm * px);
+    const float iw = 1.0f / kAtlasW, ih = 1.0f / kAtlasH;
+    // Emoji: a little larger than the letters, centred on the middle of the capitals.
+    const float es = std::round(px * 1.12f), eAdv = es + std::round(px * 0.12f);
+    const float eTop = std::round(baseline - px * 0.36f - es * 0.5f);
+    const float ei = 1.0f / EmojiAtlas::kTex;
     vita2d_texture_vertex* v = nullptr;
-    size_t nv = 0;
+    vita2d_texture_vertex* ev = nullptr;
+    size_t nv = 0, nev = 0, cap = 0, ecap = 0;
+    auto quad = [](vita2d_texture_vertex* out, float x0, float y0, float x1, float y1, float u0, float v0, float u1,
+                   float v1) {
+        vita2d_texture_vertex q[6] = {{x0, y0, 0.5f, u0, v0}, {x1, y0, 0.5f, u1, v0}, {x0, y1, 0.5f, u0, v1},
+                                      {x0, y1, 0.5f, u0, v1}, {x1, y0, 0.5f, u1, v0}, {x1, y1, 0.5f, u1, v1}};
+        memcpy(out, q, sizeof(q));
+    };
+    auto glyphQuad = [&](const FontEngine::Glyph* g, float gx, float gy) {
+        if (!g || !g->placed || !v || nv + 6 > cap) return;
+        float u0 = g->ax * iw, v0 = g->ay * ih, u1 = (g->ax + g->w) * iw, v1 = (g->ay + g->h) * ih;
+        quad(v + nv, gx, gy, gx + g->w, gy + g->h, u0, v0, u1, v1);
+        nv += 6;
+    };
+    auto emojiQuad = [&](int idx, float at) {
+        const EmojiAtlas::Slot* sl = emoji_ ? emoji_->get(idx) : nullptr;
+        if (!sl) return;
+        if (!ev) {
+            ecap = (s.size() / 2 + 1) * 6;
+            ev = (vita2d_texture_vertex*)vita2d_pool_memalign((unsigned)(ecap * sizeof(vita2d_texture_vertex)),
+                                                              sizeof(vita2d_texture_vertex));
+        }
+        if (!ev || nev + 6 > ecap) return;
+        float gx = std::round(at + (eAdv - es) * 0.5f);
+        int cx = (sl->cell % EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
+        int cy = (sl->cell / EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
+        quad(ev + nev, gx, eTop, gx + es, eTop + es, cx * ei, cy * ei, (cx + sl->size) * ei, (cy + sl->size) * ei);
+        nev += 6;
+    };
+    auto finish = [&] {
+        if (draw && v && nv) vita2d_draw_array_textured(ft_->atlas, SCE_GXM_PRIMITIVE_TRIANGLES, v, nv, color);
+        if (draw && ev && nev) {
+            vita2d_draw_array_textured(emoji_->tex, SCE_GXM_PRIMITIVE_TRIANGLES, ev, nev,
+                                       with_alpha(0xFFFFFFFFu, (uint8_t)(color >> 24)));
+        }
+    };
+
+    if (needs_shaping(s)) {
+        ShapedLine tmp;
+        const ShapedLine* L = &tmp;
+        if (keep) {
+            std::string key = s;
+            key += '\x1f';
+            key += (char)('0' + w);
+            key += (char)px;
+            auto it = cache_->lines.find(key);
+            if (it == cache_->lines.end()) {
+                if (cache_->lines.size() > 1500) cache_->lines.clear();
+                it = cache_->lines.emplace(std::move(key), ShapedLine()).first;
+                shape_line(*ft_, emoji_, font_, s, w, px, it->second);
+            }
+            L = &it->second;
+        } else {
+            shape_line(*ft_, emoji_, font_, s, w, px, tmp);
+        }
+        if (!draw) return L->width;
+        cap = L->items.size() * 6;
+        v = (vita2d_texture_vertex*)vita2d_pool_memalign((unsigned)(cap * sizeof(vita2d_texture_vertex)),
+                                                         sizeof(vita2d_texture_vertex));
+        for (const ShapedLine::Item& it : L->items) {
+            if (it.kind == ShapedLine::GLYPH) {
+                const FontEngine::Glyph* g = ft_->glyph(it.face, it.id, px);
+                if (g) glyphQuad(g, std::round(pen + it.x) + g->left, baseline - std::round(it.y) - g->top);
+            } else if (it.kind == ShapedLine::EMOJI) {
+                emojiQuad((int)it.id, pen + it.x);
+            } else if (font_) {
+                std::string u;
+                utf8_append(u, it.id);
+                vita2d_pgf_draw_text(font_, (int)(pen + it.x), (int)baseline, color, pgfScale, u.c_str());
+            }
+        }
+        finish();
+        return L->width;
+    }
+
+    // One character at a time: Roboto with fallback fonts, emoji, then the PGF font.
+    bool jp = has_kana(s);
     if (draw) {
-        v = (vita2d_texture_vertex*)vita2d_pool_memalign((unsigned)(s.size() * 6 * sizeof(vita2d_texture_vertex)),
+        cap = s.size() * 6;
+        v = (vita2d_texture_vertex*)vita2d_pool_memalign((unsigned)(cap * sizeof(vita2d_texture_vertex)),
                                                          sizeof(vita2d_texture_vertex));
     }
-    const float iw = 1.0f / kAtlasW, ih = 1.0f / kAtlasH;
     std::string fallback;
     float fallbackX = 0;
     auto flush = [&] {
@@ -344,12 +782,6 @@ float Gfx::measure(const std::string& s, float scale, int weight, bool draw, flo
         }
         fallback.clear();
     };
-    // Emoji: a little larger than the letters, centred on the middle of the capitals.
-    vita2d_texture_vertex* ev = nullptr;
-    size_t nev = 0;
-    const float es = std::round(px * 1.12f), eAdv = es + std::round(px * 0.12f);
-    const float eTop = std::round(baseline - px * 0.36f - es * 0.5f);
-    const float ei = 1.0f / EmojiAtlas::kTex;
     for (size_t i = 0, next = 0; i < s.size(); i = next) {
         next = utf8_next(s, i);
         uint32_t cp = utf8_decode(s, i);
@@ -362,56 +794,32 @@ float Gfx::measure(const std::string& s, float scale, int weight, bool draw, flo
             // A plain symbol such as the copyright sign or the play triangle stays text.
             if (idx >= 0 && !textStyle) {
                 flush();
-                if (draw) {
-                    const EmojiAtlas::Slot* sl = emoji_->get(idx);
-                    if (sl && !ev) {
-                        ev = (vita2d_texture_vertex*)vita2d_pool_memalign(
-                            (unsigned)((s.size() / 2 + 1) * 6 * sizeof(vita2d_texture_vertex)),
-                            sizeof(vita2d_texture_vertex));
-                    }
-                    if (sl && ev) {
-                        float gx = std::round(pen + (eAdv - es) * 0.5f), gy = eTop, x1 = gx + es, y1 = gy + es;
-                        int cx = (sl->cell % EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
-                        int cy = (sl->cell / EmojiAtlas::kCols) * EmojiAtlas::kCell + 1;
-                        float u0 = cx * ei, v0 = cy * ei, u1 = (cx + sl->size) * ei, v1 = (cy + sl->size) * ei;
-                        vita2d_texture_vertex q[6] = {{gx, gy, 0.5f, u0, v0}, {x1, gy, 0.5f, u1, v0},
-                                                      {gx, y1, 0.5f, u0, v1}, {gx, y1, 0.5f, u0, v1},
-                                                      {x1, gy, 0.5f, u1, v0}, {x1, y1, 0.5f, u1, v1}};
-                        memcpy(ev + nev, q, sizeof(q));
-                        nev += 6;
-                    }
-                }
+                if (draw) emojiQuad(idx, pen);
                 pen += eAdv;
                 next = end;
                 continue;
             }
         }
         // Joiners, selectors, tones and pictographs the pack lacks: no font here draws them.
-        if (is_emoji_component(cp) || is_pictograph(cp)) continue;
-        const FontEngine::Glyph& g = ft_->get(w, px, cp);
-        if (g.missing) {
+        if (is_emoji_component(cp) || is_pictograph(cp) || is_invisible(cp)) continue;
+        bool bold = false;
+        uint32_t c = fold_styled(cp, &bold);
+        int cw = bold ? W_BOLD : w;
+        unsigned gid = 0;
+        int f = ft_->pick(c, cw, jp, &gid);
+        if (f == F_PGF) {
             if (fallback.empty()) fallbackX = pen;
             fallback += s.substr(i, next - i);
             continue;
         }
         flush();
-        if (draw && v && g.placed) {
-            float gx = std::round(pen) + g.left, gy = baseline - g.top;
-            float u0 = g.ax * iw, v0 = g.ay * ih, u1 = (g.ax + g.w) * iw, v1 = (g.ay + g.h) * ih;
-            float x1 = gx + g.w, y1 = gy + g.h;
-            vita2d_texture_vertex q[6] = {{gx, gy, 0.5f, u0, v0}, {x1, gy, 0.5f, u1, v0}, {gx, y1, 0.5f, u0, v1},
-                                          {gx, y1, 0.5f, u0, v1}, {x1, gy, 0.5f, u1, v0}, {x1, y1, 0.5f, u1, v1}};
-            memcpy(v + nv, q, sizeof(q));
-            nv += 6;
-        }
-        pen += g.adv;
+        const FontEngine::Glyph* g = ft_->glyph(f, gid, px);
+        if (!g) continue;
+        if (draw) glyphQuad(g, std::round(pen) + g->left, baseline - g->top);
+        pen += g->adv;
     }
     flush();
-    if (draw && v && nv) vita2d_draw_array_textured(ft_->atlas, SCE_GXM_PRIMITIVE_TRIANGLES, v, nv, color);
-    if (draw && ev && nev) {
-        vita2d_draw_array_textured(emoji_->tex, SCE_GXM_PRIMITIVE_TRIANGLES, ev, nev,
-                                   with_alpha(0xFFFFFFFFu, (uint8_t)(color >> 24)));
-    }
+    finish();
     return pen - start;
 }
 
@@ -432,18 +840,44 @@ int Gfx::width(const std::string& s, float scale, int weight) {
     return (int)std::ceil(measure(s, scale, weight, false, 0, 0, 0));
 }
 
+int Gfx::trialWidth(const std::string& s, float scale, int weight) {
+    if (s.empty()) return 0;
+    return (int)std::ceil(measure(s, scale, weight, false, 0, 0, 0, false));
+}
+
+namespace {
+// Byte offsets inside s where a word may be split (between clusters).
+std::vector<size_t> cluster_cuts(const std::string& s) {
+    std::vector<size_t> cuts;
+    uint32_t prev = 0;
+    for (size_t i = 0; i < s.size(); i = utf8_next(s, i)) {
+        uint32_t cp = utf8_decode(s, i);
+        if (i > 0 && can_break_between(prev, cp)) cuts.push_back(i);
+        prev = cp;
+    }
+    return cuts;
+}
+}  // namespace
+
 std::string Gfx::ellipsize(const std::string& s, float maxWidth, float scale, int weight) {
     if (width(s, scale, weight) <= maxWidth) return s;
-    // Binary search on code point boundaries.
-    std::vector<size_t> bounds;
-    for (size_t i = 0; i < s.size(); i = utf8_next(s, i)) bounds.push_back(i);
-    size_t lo = 0, hi = bounds.size();
+    std::string key = s;
+    key += str_printf("\x1f%d\x1f%.2f\x1f%d", (int)maxWidth, scale, weight);
+    auto it = cache_->ellipsized.find(key);
+    if (it != cache_->ellipsized.end()) return it->second;
+    if (cache_->ellipsized.size() > 2500) cache_->ellipsized.clear();
+    // Binary search on cluster boundaries.
+    std::vector<size_t> cuts = cluster_cuts(s);
+    cuts.insert(cuts.begin(), 0);
+    size_t lo = 0, hi = cuts.size();
     while (lo + 1 < hi) {
         size_t mid = (lo + hi) / 2;
-        if (width(s.substr(0, bounds[mid]) + "...", scale, weight) <= maxWidth) lo = mid;
+        if (trialWidth(s.substr(0, cuts[mid]) + "...", scale, weight) <= maxWidth) lo = mid;
         else hi = mid;
     }
-    return trim(s.substr(0, bounds.empty() ? 0 : bounds[lo])) + "...";
+    std::string out = trim(s.substr(0, cuts[lo])) + "...";
+    cache_->ellipsized.emplace(std::move(key), out);
+    return out;
 }
 
 const std::vector<std::string>& Gfx::wrap(const std::string& s, float maxWidth, float scale, int maxLines,
@@ -461,17 +895,19 @@ const std::vector<std::string>& Gfx::wrap(const std::string& s, float maxWidth, 
         size_t pend = s.find('\n', pstart);
         if (pend == std::string::npos) pend = s.size();
         std::string para = s.substr(pstart, pend - pstart);
-        // Tokens: words separated by spaces; CJK characters are tokens of their own.
+        const size_t paraFirst = lines.size();
+        // Tokens: words separated by spaces; CJK characters are tokens of their own. A zero-width
+        // space allows a break without adding a space.
         std::vector<std::pair<std::string, bool>> toks;  // token, preceded by a space
         std::string cur;
         bool curSpace = false, pendingSpace = false;
         for (size_t i = 0; i < para.size(); i = utf8_next(para, i)) {
             uint32_t cp = utf8_decode(para, i);
             size_t n = utf8_next(para, i) - i;
-            if (cp == ' ' || cp == '\t' || cp == '\r') {
+            if (cp == ' ' || cp == '\t' || cp == '\r' || cp == 0x200B) {
                 if (!cur.empty()) toks.push_back({cur, curSpace});
                 cur.clear();
-                pendingSpace = true;
+                if (cp != 0x200B) pendingSpace = true;
             } else if (is_cjk(cp)) {
                 if (!cur.empty()) {
                     toks.push_back({cur, curSpace});
@@ -492,7 +928,7 @@ const std::vector<std::string>& Gfx::wrap(const std::string& s, float maxWidth, 
         std::string line;
         for (auto& tk : toks) {
             std::string cand = line.empty() ? tk.first : line + (tk.second ? " " : "") + tk.first;
-            if (width(cand, scale, weight) <= maxWidth) {
+            if (trialWidth(cand, scale, weight) <= maxWidth) {
                 line = cand;
                 continue;
             }
@@ -504,16 +940,18 @@ const std::vector<std::string>& Gfx::wrap(const std::string& s, float maxWidth, 
                     break;
                 }
             }
-            // Token wider than the line: hard-break by code point.
+            // A word wider than the line: split it between clusters, as much per line as fits.
             std::string t = tk.first;
-            while (width(t, scale, weight) > maxWidth) {
-                size_t cut = 0;
-                for (size_t i = 0; i < t.size(); i = utf8_next(t, i)) {
-                    size_t nx = utf8_next(t, i);
-                    if (width(t.substr(0, nx), scale, weight) > maxWidth) break;
-                    cut = nx;
+            while (trialWidth(t, scale, weight) > maxWidth) {
+                std::vector<size_t> cuts = cluster_cuts(t);
+                if (cuts.empty()) break;
+                size_t lo = 0, hi = cuts.size();  // the first cut whose prefix doesn't fit
+                while (lo < hi) {
+                    size_t mid = (lo + hi) / 2;
+                    if (trialWidth(t.substr(0, cuts[mid]), scale, weight) <= maxWidth) lo = mid + 1;
+                    else hi = mid;
                 }
-                if (cut == 0) cut = utf8_next(t, 0);
+                size_t cut = cuts[lo > 0 ? lo - 1 : 0];
                 lines.push_back(t.substr(0, cut));
                 t = t.substr(cut);
                 if ((int)lines.size() >= maxLines) {
@@ -528,6 +966,14 @@ const std::vector<std::string>& Gfx::wrap(const std::string& s, float maxWidth, 
             if (!line.empty() || para.empty()) lines.push_back(line);
             if ((int)lines.size() >= maxLines && pend < s.size()) truncated = true;
             if ((int)lines.size() > maxLines) lines.resize(maxLines);
+        }
+        // Each line is laid out on its own, so a line whose first strong character points the
+        // other way than its paragraph gets a mark to keep the paragraph's direction.
+        if (needs_shaping(para)) {
+            bool paraRtl = first_strong_rtl(para);
+            for (size_t k = paraFirst; k < lines.size(); k++) {
+                if (first_strong_rtl(lines[k]) != paraRtl) lines[k].insert(0, paraRtl ? "\xE2\x80\x8F" : "\xE2\x80\x8E");
+            }
         }
         if (pend >= s.size()) break;
         pstart = pend + 1;
@@ -547,8 +993,14 @@ float Gfx::paragraph(float x, float y, float maxWidth, uint32_t color, float sca
                      float lineGap, int weight) {
     const std::vector<std::string>& lines = wrap(s, maxWidth, scale, maxLines, weight);
     float lh = lineHeight(scale) * lineGap;
-    for (size_t i = 0; i < lines.size(); i++) text(x, y + i * lh, color, scale, lines[i], weight);
+    for (size_t i = 0; i < lines.size(); i++) textLine(x, y + i * lh, maxWidth, color, scale, lines[i], weight);
     return lines.size() * lh;
+}
+
+void Gfx::textLine(float x, float y, float maxWidth, uint32_t color, float scale, const std::string& s, int weight) {
+    // Right-to-left lines line up on the right, like dir="auto" text on the web.
+    float lx = rtl(s) ? x + maxWidth - width(s, scale, weight) : x;
+    text(lx, y, color, scale, s, weight);
 }
 
 // ---------------------------------------------------------------- shapes

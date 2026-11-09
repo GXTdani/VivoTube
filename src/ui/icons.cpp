@@ -255,6 +255,44 @@ void draw_icon(Icon icon, float cx, float cy, float size, uint32_t c, uint32_t b
             tri(p, 13.5f, 2.5f, 21, 3.5f, 19.5f, 10.5f, c);
             break;
         }
+        case Icon::Speed: {
+            // A gauge: the top of a dial with its needle pointing up and right.
+            float r = 8.5f;
+            for (int i = 0; i < 12; i++) {
+                float a0 = 3.14159f + i * 0.2618f, a1 = a0 + 0.2618f;
+                poly(p, {12 + r * std::cos(a0), 15 + r * std::sin(a0), 12 + r * std::cos(a1), 15 + r * std::sin(a1)},
+                     T, c);
+            }
+            poly(p, {12, 15, 16.5f, 9.5f}, T, c);
+            rrect(p, 10.5f, 13.5f, 13.5f, 16.5f, 1.5f, c);
+            break;
+        }
+        case Icon::AddToQueue:
+            // Three lines with a plus, like the queue button.
+            poly(p, {3.5f, 6, 15.5f, 6}, T, c);
+            poly(p, {3.5f, 11, 15.5f, 11}, T, c);
+            poly(p, {3.5f, 16, 10.5f, 16}, T, c);
+            poly(p, {17, 13, 17, 21}, T, c);
+            poly(p, {13, 17, 21, 17}, T, c);
+            break;
+        case Icon::PlayNext:
+            // Three lines with a play triangle.
+            poly(p, {3.5f, 6, 15.5f, 6}, T, c);
+            poly(p, {3.5f, 11, 11.5f, 11}, T, c);
+            poly(p, {3.5f, 16, 11.5f, 16}, T, c);
+            tri(p, 14.5f, 11.5f, 21, 15.5f, 14.5f, 19.5f, c);
+            break;
+        case Icon::NotInterested: {
+            // A circle with a slash through it.
+            float r = 8.5f;
+            for (int i = 0; i < 24; i++) {
+                float a0 = i * 0.2618f, a1 = a0 + 0.2618f;
+                poly(p, {12 + r * std::cos(a0), 12 + r * std::sin(a0), 12 + r * std::cos(a1), 12 + r * std::sin(a1)},
+                     T, c);
+            }
+            poly(p, {6, 6, 18, 18}, T, c);
+            break;
+        }
         case Icon::Plus:
             poly(p, {12, 4.5f, 12, 19.5f}, T, c);
             poly(p, {4.5f, 12, 19.5f, 12}, T, c);

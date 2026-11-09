@@ -1,5 +1,7 @@
 #include "player.h"
 
+#include "../core/stretch.h"
+
 #include <psp2/gxm.h>
 #include <psp2/kernel/threadmgr.h>
 #include <vita2d.h>
@@ -119,9 +121,24 @@ std::string Player::error() const {
 
 double Player::positionLocked() const {
     if (!clockRunning_) return clockPts_;
-    double dt = monotonic_seconds() - clockWall_;
+    double dt = (monotonic_seconds() - clockWall_) * speed_;
     if (noAudio_) return clockPts_ + dt;
-    return clockPts_ + std::min(dt, audioFrameDur_ * 1.5);
+    return clockPts_ + std::min(dt, audioFrameDur_ * 1.5 * speed_);
+}
+
+void Player::setSpeed(double speed) {
+    speed = std::max(0.25, std::min(2.0, speed));
+    std::lock_guard<std::mutex> lock(m_);
+    if (speed == speed_) return;
+    clockPts_ = positionLocked();  // the clock carries on from here at the new rate
+    clockWall_ = monotonic_seconds();
+    speed_ = speed;
+    VT_LOG("player: speed %.2fx", speed);
+}
+
+double Player::speed() const {
+    std::lock_guard<std::mutex> lock(m_);
+    return speed_;
 }
 
 double Player::position() const {
@@ -472,6 +489,15 @@ void Player::audioMain() {
     }
     std::vector<int16_t> pcm((size_t)dec.samplesPerFrame() * 2 * 2);
     const double ts = audio_.init.timescale;
+    const double rate = dec.sampleRate() > 0 ? dec.sampleRate() : 44100;
+    // At speeds other than 1 the decoded audio goes through the time stretcher, and the clock
+    // follows the media time of the stretched audio being played.
+    TimeStretch stretch;
+    stretch.setSampleRate((int)rate);
+    std::vector<int16_t> grain((size_t)std::max(port.grain(), 1) * 2);
+    bool stretching = false;
+    uint32_t stretchGen = 0;
+    double stretchBase = 0;
     while (!quit_) {
         std::shared_ptr<Segment> seg;
         uint32_t g;
@@ -533,13 +559,43 @@ void Player::audioMain() {
             }
             int n = dec.decode(seg->data.data() + s.offset, s.size, pcm.data());
             if (n <= 0) continue;
-            if (n < port.grain()) memset(pcm.data() + n * 2, 0, (size_t)(port.grain() - n) * 4);
-            port.output(pcm.data());
-            std::lock_guard<std::mutex> lock(m_);
-            if (gen_ != g) break;
-            clockPts_ = t;
-            clockWall_ = monotonic_seconds();
-            clockRunning_ = !paused_;
+            double speed;
+            {
+                std::lock_guard<std::mutex> lock(m_);
+                speed = speed_;
+            }
+            if (speed == 1.0) {
+                stretching = false;
+                if (n < port.grain()) memset(pcm.data() + n * 2, 0, (size_t)(port.grain() - n) * 4);
+                port.output(pcm.data());
+                std::lock_guard<std::mutex> lock(m_);
+                if (gen_ != g) break;
+                clockPts_ = t;
+                clockWall_ = monotonic_seconds();
+                clockRunning_ = !paused_;
+                continue;
+            }
+            if (!stretching || stretchGen != g) {
+                stretch.clear();
+                stretching = true;
+                stretchGen = g;
+                stretchBase = t;
+            }
+            stretch.setSpeed(speed);
+            stretch.put(pcm.data(), n);
+            bool stale = false;
+            while (!stale && stretch.available() >= port.grain()) {
+                double media = stretchBase + stretch.position() / rate;
+                stretch.take(grain.data(), port.grain());
+                port.output(grain.data());
+                std::lock_guard<std::mutex> lock(m_);
+                stale = gen_ != g;
+                if (stale) break;
+                clockPts_ = media;
+                clockWall_ = monotonic_seconds();
+                clockRunning_ = !paused_;
+            }
+            if (stale) break;
         }
     }
 }

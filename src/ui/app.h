@@ -71,6 +71,10 @@ public:
     virtual void drawMini(const Rect&, bool /*focused*/) {}
     virtual void togglePlay() {}
     virtual std::string videoId() const { return ""; }
+    // Watch pages: adds a video to the queue, after the current one when `next` is set.
+    virtual bool enqueue(const Item&, bool /*next*/) { return false; }
+    // The user hid a recommendation ("Not interested"): drop it from the feeds on screen.
+    virtual void hiddenChanged() {}
 
 protected:
     // Runs work() on a worker thread, then done(result) on the main thread, unless this
@@ -146,7 +150,12 @@ public:
     void showChecklist(const std::string& title, const std::vector<std::string>& items, const std::vector<int>& checks,
                        std::function<int(int)> cb, const std::vector<Icon>& icons = {});
     // Standard options for an item (Watch Later, playlists, share, channel). extra entries come first.
-    void itemMenu(const Item& it, std::vector<std::pair<std::string, std::function<void()>>> extra = {});
+    // `recommended`: the item came from recommendations (Home, related videos), so the menu
+    // also offers "Not interested" and "Don't recommend channel".
+    void itemMenu(const Item& it, std::vector<std::pair<std::string, std::function<void()>>> extra = {},
+                  bool recommended = false);
+    // Tells every open screen that the hidden recommendations changed.
+    void hiddenChanged();
     void confirm(const std::string& question, const std::string& yesLabel, std::function<void()> yes);
     // System keyboard; cb runs with the text when the user confirms; cancel runs otherwise.
     void textInput(const std::string& title, const std::string& initial, std::function<void(const std::string&)> cb,
@@ -162,6 +171,11 @@ public:
     void expandMini();
     void closeMini();
     bool hasMini() const { return mini_ != nullptr; }
+    // "Play next in queue" / "Add to queue" on whatever is playing (the watch page or the mini
+    // player); plays the video if nothing is.
+    void enqueue(const Item& it, bool next);
+    // Replaces the mini player with a new one playing `it` (the queue moving on while small).
+    void playInMini(const Item& it, const std::vector<Item>& queue, int queueIndex);
     void focusContent() { zone_ = Zone::Content; }
 
     // Text helpers that depend on the system button layout.

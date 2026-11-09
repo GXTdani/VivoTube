@@ -41,6 +41,9 @@ public:
     void setPaused(bool paused);
     bool paused() const { return paused_; }
     void seek(double seconds);
+    // Playback speed, 0.25 to 2. Audio is time-stretched so voices keep their pitch.
+    void setSpeed(double speed);
+    double speed() const;
     double position() const;
     double duration() const;
     double bufferedAhead() const;  // seconds of video downloaded past the playhead
@@ -103,6 +106,7 @@ private:
 
     // Clock, guarded by m_.
     double clockPts_ = 0, clockWall_ = 0, audioFrameDur_ = 1024.0 / 44100.0;
+    double speed_ = 1.0;
     bool clockRunning_ = false, waitingData_ = true, noAudio_ = false;
     bool videoEos_ = false, audioEos_ = false;
 
