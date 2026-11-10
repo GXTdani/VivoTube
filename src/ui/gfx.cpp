@@ -176,8 +176,9 @@ struct FontEngine {
         return f.ft ? &f : nullptr;
     }
 
-    // The glyph for cp, or 0. HarfBuzz's cmap reader is used where there is one: the Vita build
-    // of FreeType only exposes one cmap subtable of the Noto Indic fonts and misses their letters.
+    // The glyph for cp, or 0. HarfBuzz's cmap reader is used where there is one (the bundled
+    // fonts). It also keeps lookups working if FreeType drops cmap subtables it can't validate,
+    // which it did before src/vita/setjmp.cpp fixed the jmp_buf size mismatch.
     unsigned index(int fi, uint32_t cp) {
         Face* f = face(fi);
         if (!f) return 0;
@@ -361,8 +362,9 @@ struct EmojiAtlas {
         Slot& sl = slots[index];
         std::string data;
         static uint32_t img[kMax * kMax];
-        // Decoded with vita2d's loader into a scratch texture (libpng's simplified reader
-        // crashed here), then copied into the atlas.
+        // Decoded with vita2d's loader into a scratch texture, then copied into the atlas. (Every
+        // libpng call here needs the setjmp in src/vita/setjmp.cpp: with the C library's, a PNG
+        // load crashed on a real Vita.)
         if (!pack.png(index, data) || data.size() < 8 || memcmp(data.data(), "\x89PNG", 4) != 0) return nullptr;
         vita2d_texture* t = vita2d_load_PNG_buffer(data.data());
         if (!t) return nullptr;
