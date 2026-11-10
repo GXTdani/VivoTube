@@ -37,6 +37,27 @@ int compare_versions(const std::string& a, const std::string& b) {
     return 0;
 }
 
+// "[text](url)" -> "text"
+static std::string strip_links(const std::string& s) {
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '[') {
+            size_t close = s.find(']', i + 1);
+            if (close != std::string::npos && close + 1 < s.size() && s[close + 1] == '(') {
+                size_t paren = s.find(')', close + 2);
+                if (paren != std::string::npos) {
+                    out += s.substr(i + 1, close - i - 1);
+                    i = paren + 1;
+                    continue;
+                }
+            }
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
 std::string plain_release_notes(const std::string& md) {
     std::string out;
     size_t start = 0;
@@ -50,6 +71,8 @@ std::string plain_release_notes(const std::string& md) {
         t = trim(t);
         if (starts_with(t, "- ") || starts_with(t, "* ")) t = "\xE2\x80\xA2 " + t.substr(2);  // bullets
         t = replace_all(t, "**", "");
+        t = replace_all(t, "*", "");
+        t = strip_links(t);
         t = replace_all(t, "__", "");
         t = replace_all(t, "`", "");
         if (!(t.empty() && (out.empty() || (out.size() >= 2 && out.compare(out.size() - 2, 2, "\n\n") == 0)))) {

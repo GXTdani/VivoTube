@@ -42,7 +42,9 @@ VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google.
 - **Sign in with Google** (optional, see below): your YouTube subscriptions, likes and playlists,
   kept in sync with the app
 - **Auto-update**: on launch VivoTube checks this repository's latest release and can install it
-  in place, then restarts itself
+  in place, then restarts itself. Installing in place needs *Settings > HENkaku Settings > Enable
+  Unsafe Homebrew*; without it, VivoTube downloads the update to `ux0:data/VivoTube/` for you to
+  install with VitaShell
 - Without an account, subscriptions, history, likes, Watch later and playlists are all stored
   locally on the memory card
 

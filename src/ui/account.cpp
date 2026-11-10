@@ -267,7 +267,7 @@ private:
 
 class UpdateScreen : public Screen {
 public:
-    explicit UpdateScreen(const Release& r) : rel_(r) {
+    explicit UpdateScreen(const Release& r) : rel_(r), inPlace_(can_update_in_place(kAppDir)) {
         notes_.rowH = g_gfx.lineHeight(0.64f);
         notesLines_ = g_gfx.wrap(rel_.notes.empty() ? "No release notes." : rel_.notes, 560, 0.64f, 400);
         notes_.count = (int)notesLines_.size();
@@ -275,7 +275,7 @@ public:
 
     void update(Input& in) override {
         if (state_ == S_DOWNLOADING && prog_->installing) state_ = S_INSTALLING;
-        if (state_ == S_OFFER || state_ == S_ERROR || state_ == S_DONE) {
+        if (state_ == S_OFFER || state_ == S_ERROR || state_ == S_DONE || state_ == S_SAVED) {
             int b = buttons_input(in, btns_, sel_);
             if (b >= 0) press(b);
             // Up / Down scroll the notes.
@@ -300,7 +300,7 @@ public:
         bool act = active();
         float w = 660, h = 440;
         Rect card;
-        float y = draw_card(w, h, "Update available", &card);
+        float y = draw_card(w, h, state_ == S_SAVED ? "Update downloaded" : "Update available", &card);
         float x = card.x + 28, tw = w - 56;
         g_gfx.text(x, y - 18, col::text2, 0.68f,
                    "VivoTube " + rel_.version + " is out " G_DOT " you have " VT_VERSION +
@@ -316,12 +316,20 @@ public:
             if (state_ == S_ERROR) {
                 y += g_gfx.paragraph(x, y, tw, rgba(255, 120, 120), 0.66f, error_, 4) + 8;
                 nh = card.y + h - 80 - y;
+            } else if (!inPlace_) {
+                y += g_gfx.paragraph(x, y, tw, rgba(255, 200, 110), 0.64f,
+                                     "VivoTube can't install updates itself while unsafe homebrew is off. Turn on "
+                                     "Settings > HENkaku Settings > Enable Unsafe Homebrew and reopen VivoTube, or "
+                                     "download the update now and install it with VitaShell.",
+                                     4) + 8;
+                nh = card.y + h - 80 - y;
             }
             notesRect_ = Rect{x, y, tw, nh};
             notes_.draw(notesRect_, [&](int i, const Rect& r, bool) {
                 g_gfx.text(r.x, r.y, col::text, 0.64f, notesLines_[i]);
             });
-            labels = {state_ == S_ERROR ? "Try again" : "Update now", "Later", "Skip this version"};
+            labels = {state_ == S_ERROR ? "Try again" : inPlace_ ? "Update now" : "Download", "Later",
+                      "Skip this version"};
         } else if (state_ == S_DOWNLOADING || state_ == S_INSTALLING) {
             float frac = 0;
             std::string line;
@@ -342,17 +350,28 @@ public:
             g_gfx.paragraph(x, card.y + h / 2 - 40, tw, col::text, 0.76f,
                             "Update installed. VivoTube is restarting...", 2);
             labels = {"Restart now"};
+        } else if (state_ == S_SAVED) {
+            y += g_gfx.paragraph(x, y + 8, tw, col::text, 0.72f, "The update was saved to " + saved_ + ".", 3) + 24;
+            const char* steps[] = {"1. Close VivoTube and open VitaShell.", "2. Go to ux0:data/VivoTube/.",
+                                   "3. Press " G_CROSS " on the file and choose to install it.",
+                                   "4. Open VivoTube again. You can delete the file afterwards."};
+            for (const char* st : steps) y += g_gfx.paragraph(x, y, tw, col::text2, 0.68f, st, 2) + 6;
+            labels = {"Close"};
         }
         btns_ = draw_buttons(x, card.y + h - 60, labels, sel_, act);
         if (sel_ >= (int)labels.size()) sel_ = 0;
     }
 
 private:
-    enum State { S_OFFER, S_DOWNLOADING, S_INSTALLING, S_DONE, S_ERROR };
+    enum State { S_OFFER, S_DOWNLOADING, S_INSTALLING, S_DONE, S_ERROR, S_SAVED };
 
     void press(int b) {
         if (state_ == S_DONE) {
             relaunch_app();
+            return;
+        }
+        if (state_ == S_SAVED) {
+            g_app->pop();
             return;
         }
         if (b == 0) start();
@@ -369,13 +388,14 @@ private:
         state_ = S_DOWNLOADING;
         prog_ = std::make_shared<Progress>();
         struct R {
-            bool ok = false;
+            bool ok = false, savedOnly = false;
             std::string err, saved;
         };
         std::string url = rel_.vpkUrl, ver = rel_.version;
+        bool inPlace = inPlace_;
         std::shared_ptr<Progress> prog = prog_;
         // The worker reports through `prog`, which it shares, so closing the screen is safe.
-        async<R>([url, ver, prog] {
+        async<R>([url, ver, prog, inPlace] {
             R r;
             HttpRequest req;
             req.url = url;
@@ -388,6 +408,12 @@ private:
             HttpResponse res = http_request(req);
             if (!res.ok()) {
                 r.err = "Download failed (" + res.describe() + ").";
+                return r;
+            }
+            if (!inPlace) {
+                r.saved = "ux0:data/VivoTube/VivoTube-" + ver + ".vpk";
+                r.savedOnly = write_file_atomic(r.saved, res.body);
+                if (!r.savedOnly) r.err = "Couldn't save the update to " + r.saved + ".";
                 return r;
             }
             prog->installing = true;
@@ -406,6 +432,12 @@ private:
                 restartAt_ = monotonic_seconds() + 1.5;
                 return;
             }
+            if (r.savedOnly) {
+                state_ = S_SAVED;
+                saved_ = r.saved;
+                sel_ = 0;
+                return;
+            }
             state_ = S_ERROR;
             error_ = r.err;
             if (!r.saved.empty()) error_ += " The package was saved to " + r.saved + "; install it with VitaShell.";
@@ -413,8 +445,9 @@ private:
     }
 
     Release rel_;
+    bool inPlace_;
     State state_ = S_OFFER;
-    std::string error_;
+    std::string error_, saved_;
     std::vector<std::string> notesLines_;
     ListView notes_;
     Rect notesRect_;

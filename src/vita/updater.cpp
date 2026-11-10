@@ -1,8 +1,11 @@
 #include "updater.h"
 
 #include <psp2/appmgr.h>
+#include <psp2/io/devctl.h>
+#include <psp2/io/fcntl.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -33,12 +36,22 @@ bool inflate_raw(const uint8_t* src, size_t srcLen, std::string& out, size_t out
     return true;
 }
 
-bool write_all(const std::string& path, const std::string& data) {
-    FILE* f = fopen(path.c_str(), "wb");
-    if (!f) return false;
-    bool ok = data.empty() || fwrite(data.data(), 1, data.size(), f) == data.size();
-    ok = fclose(f) == 0 && ok;
-    return ok;
+// Returns 0 or the system's error code, so failures can say why.
+int write_all(const std::string& path, const std::string& data) {
+    SceUID fd = sceIoOpen(path.c_str(), SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    if (fd < 0) return fd;
+    size_t off = 0;
+    int err = 0;
+    while (off < data.size()) {
+        int n = sceIoWrite(fd, data.data() + off, (SceSize)std::min<size_t>(data.size() - off, 1u << 20));
+        if (n <= 0) {
+            err = n < 0 ? n : -1;
+            break;
+        }
+        off += (size_t)n;
+    }
+    int c = sceIoClose(fd);
+    return err ? err : (c < 0 ? c : 0);
 }
 
 std::string parent_dir(const std::string& p) {
@@ -97,8 +110,9 @@ bool install_update(const std::string& vpk, const std::string& appDir, std::stri
         }
         std::string target = appDir + "/" + e->name + ".new";
         make_dirs(parent_dir(target));
-        if (!write_all(target, data)) {
-            if (err) *err = "couldn't write " + target;
+        if (int code = write_all(target, data)) {
+            VT_LOG("update: writing %s failed: 0x%08X", target.c_str(), (unsigned)code);
+            if (err) *err = str_printf("couldn't write %s (error 0x%08X)", target.c_str(), (unsigned)code);
             cleanup();
             return false;
         }
@@ -117,6 +131,17 @@ bool install_update(const std::string& vpk, const std::string& appDir, std::stri
     }
     VT_LOG("update: installed %u files into %s", (unsigned)files.size(), appDir.c_str());
     return true;
+}
+
+bool can_update_in_place(const std::string& appDir) {
+    std::string probe = appDir + "/.update_test";
+    int code = write_all(probe, "ok");
+    if (code == 0) sceIoRemove(probe.c_str());
+    // VitaShell's test: ux0: refuses this request to homebrew that runs without extended rights.
+    int devctl = sceIoDevctl("ux0:", 0x3001, nullptr, 0, nullptr, 0);
+    VT_LOG("update: %s is %swritable (0x%08X); ux0 devctl 0x%08X", appDir.c_str(), code == 0 ? "" : "not ",
+           (unsigned)code, (unsigned)devctl);
+    return code == 0;
 }
 
 bool relaunch_app() {

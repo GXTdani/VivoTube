@@ -335,6 +335,9 @@ static void test_update() {
         CHECK(r.vpkUrl == "https://x/VivoTube.vpk" && r.vpkSize == 4321);
         CHECK(r.notes == "What's new\n\n\xE2\x80\xA2 Shorts tab\n\xE2\x80\xA2 Faster search");
     }
+    CHECK(plain_release_notes("See the [privacy policy](https://x/p.html) and *File > Install*.") ==
+          "See the privacy policy and File > Install.");
+    CHECK(plain_release_notes("[a](u) [b](v), [not a link] (x) [c]") == "a b, [not a link] (x) [c]");
     JDocPtr nf = jparse("{\"message\":\"Not Found\"}", &err);
     CHECK(nf && !parse_release(*nf).ok() && parse_release(*nf).error == "Not Found");
     JDocPtr noVpk = jparse("{\"tag_name\":\"v2\",\"assets\":[]}", &err);

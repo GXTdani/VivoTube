@@ -15,8 +15,8 @@ set(VITA_APP_NAME "VivoTube")
 set(VITA_TITLEID "VIVO00001")
 # Keep these two in step: VITA_VERSION is the LiveArea's "XX.YY", VT_VERSION the release tag
 # (without the "v") that the auto-updater compares against GitHub's latest release.
-set(VITA_VERSION "01.32")
-set(VT_VERSION "1.3.2")
+set(VITA_VERSION "01.33")
+set(VT_VERSION "1.3.3")
 
 # Not checked in: the Google OAuth client to build in (see secrets.cmake.example). Official
 # releases carry VivoTube's own; without it, sign-in needs ux0:data/VivoTube/google_client.json.
