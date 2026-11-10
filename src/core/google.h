@@ -2,8 +2,8 @@
 // code, you approve it on a phone or computer), plus the YouTube Data API v3 calls VivoTube
 // syncs with: subscriptions, ratings, playlists and liked videos.
 //
-// The OAuth client is the user's own ("TVs and Limited Input devices" type) from Google Cloud,
-// read from ux0:data/VivoTube/google_client.json or compiled in from secrets.cmake.
+// The OAuth client ("TVs and Limited Input devices" type) is compiled in from secrets.cmake (release
+// builds carry VivoTube's own), and a google_client.json in ux0:data/VivoTube/ replaces it.
 // Network methods block; call them on worker threads. State is guarded by a mutex.
 #pragma once
 
@@ -53,6 +53,7 @@ public:
     // Loads the OAuth client and any saved sign-in from dir.
     void init(const std::string& dir);
     bool configured() const;
+    bool ownClient() const;  // true when google_client.json replaced the built-in client
     bool signedIn() const;
     GoogleProfile profile() const;
     std::string clientFile() const { return dir_ + "/google_client.json"; }
@@ -84,6 +85,7 @@ private:
     mutable std::mutex m_;
     std::string dir_;
     std::string clientId_, clientSecret_;
+    bool ownClient_ = false;
     std::string refresh_, access_;
     int64_t accessExpiry_ = 0;
     GoogleProfile profile_;

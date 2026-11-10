@@ -191,6 +191,7 @@ void GoogleAccount::init(const std::string& dir) {
             if (!id.empty()) {
                 clientId_ = id;
                 clientSecret_ = secret;
+                ownClient_ = true;
             }
         } else {
             VT_LOG("google: google_client.json: %s", err.c_str());
@@ -205,12 +206,18 @@ void GoogleAccount::init(const std::string& dir) {
             profile_.avatar = jstr(jget(*d, "avatar"));
         }
     }
-    VT_LOG("google: client %s, %s", clientId_.empty() ? "not set" : "set", refresh_.empty() ? "signed out" : "signed in");
+    VT_LOG("google: client %s, %s", clientId_.empty() ? "not set" : ownClient_ ? "from google_client.json" : "built in",
+           refresh_.empty() ? "signed out" : "signed in");
 }
 
 bool GoogleAccount::configured() const {
     std::lock_guard<std::mutex> lock(m_);
     return !clientId_.empty();
+}
+
+bool GoogleAccount::ownClient() const {
+    std::lock_guard<std::mutex> lock(m_);
+    return ownClient_;
 }
 
 bool GoogleAccount::signedIn() const {

@@ -77,7 +77,7 @@ public:
 
     void draw() override {
         bool act = active();
-        float w = 640, h = 400;
+        float w = 640, h = state_ == S_WAITING ? 460 : 400;
         Rect card;
         float y = draw_card(w, h, "Sign in with Google", &card);
         float x = card.x + 28, tw = w - 56;
@@ -123,6 +123,15 @@ public:
                 g_gfx.text(x + 28, y, col::text2, 0.64f,
                            str_printf("Waiting for you to approve VivoTube " G_DOT " code expires in %d:%02d", left / 60,
                                       left % 60));
+                y += 40;
+                y += g_gfx.paragraph(x, y, tw, col::text2, 0.62f,
+                                     "If Google warns that it hasn't verified this app, choose Advanced, then "
+                                     "Go to \xE2\x80\xA6 (unsafe).",
+                                     2) + 10;
+                g_gfx.paragraph(x, y, tw, col::text3, 0.58f,
+                                "By signing in, you agree to the YouTube Terms of Service and VivoTube's privacy "
+                                "policy: hamburger101.github.io/VivoTube/privacy.html",
+                                2);
                 labels = {"Get a new code", "Cancel"};
                 break;
             }
@@ -156,7 +165,10 @@ private:
             if (!c.error.empty()) {
                 state_ = S_ERROR;
                 error_ = "Google refused the request: " + c.error +
-                         "\n\nCheck that google_client.json is a \"TVs and Limited Input devices\" client.";
+                         (g_app->account.ownClient()
+                              ? "\n\nCheck that google_client.json is a \"TVs and Limited Input devices\" client."
+                              : "\n\nVivoTube's built-in sign-in isn't available right now. You can use your own "
+                                "Google OAuth client instead: see \"Signing in with Google\" in the README on GitHub.");
                 return;
             }
             device_ = c.deviceCode;

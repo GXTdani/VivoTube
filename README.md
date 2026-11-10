@@ -87,7 +87,7 @@ Data lives in `ux0:data/VivoTube/`:
 | File | Contents |
 |---|---|
 | `subscriptions.json`, `history.json`, `watch_later.json`, `playlists.json`, `ratings.json`, `searches.json`, `settings.json` | Your local library and settings |
-| `google_client.json` (optional) | Your Google OAuth client, for signing in |
+| `google_client.json` (optional) | Your own Google OAuth client, used instead of the built-in one |
 | `account.json` | The signed-in account's refresh token. Delete it (or sign out) to forget the account |
 | `log.txt` | Diagnostic log, useful for bug reports |
 | `clients.json` (optional) | Overrides the built-in InnerTube client definitions (see below) |
@@ -95,9 +95,22 @@ Data lives in `ux0:data/VivoTube/`:
 ## Signing in with Google
 
 Signing in is optional. When you're signed in, VivoTube uses the official YouTube Data API to
-read and change your subscriptions, likes and playlists. Google requires every app that uses
-that API to have its own OAuth client, and VivoTube doesn't ship one, so you create your own.
-Tokens go only between the Vita and Google.
+read and change your subscriptions, likes and playlists. Tokens go only between the Vita and
+Google. See the [privacy policy](https://hamburger101.github.io/VivoTube/privacy.html).
+
+1. In VivoTube, choose **Sign in** (top right). The app shows a code.
+2. On your phone or PC, open [google.com/device](https://www.google.com/device), enter the code
+   and sign in with your Google account.
+3. Google hasn't verified VivoTube, so it shows a warning first: choose **Advanced**, then
+   **Go to … (unsafe)**, and allow access.
+
+Google limits apps it hasn't verified to 100 accounts in total, and all VivoTube users share one
+daily Data API quota. If the built-in sign-in stops working because of either, you can use your
+own OAuth client instead.
+
+### Using your own OAuth client
+
+A `google_client.json` on the memory card takes the place of the built-in client.
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com), create a project, and
    enable **YouTube Data API v3** for it (*APIs & Services > Library*).
@@ -124,13 +137,15 @@ Refreshing starts from different videos, and scrolling down keeps finding more.
 
 Notes:
 
-- While the consent screen's publishing status is *Testing*, Google signs you out after 7 days,
-  so you'll need to repeat step 5 now and then.
-- The Data API has a daily quota (10,000 units by default), which is plenty for one person.
+- With your own client: while its consent screen's publishing status is *Testing*, Google signs
+  you out after 7 days. Choose *Publish app* under *Audience* to stop that, or sign in again now
+  and then. Your client also gets its own Data API quota (10,000 units a day), plenty for one
+  person.
 - Videos still play through InnerTube, signed in or not. Sign-in only changes your library.
 
-If you build VivoTube yourself, you can compile a client in instead: copy
-`secrets.cmake.example` to `secrets.cmake` and fill it in. That file is ignored by git.
+If you build VivoTube yourself, your build has no built-in client, so sign-in needs a
+`google_client.json`. To compile a client in instead, copy `secrets.cmake.example` to
+`secrets.cmake` and fill it in. That file is ignored by git.
 
 ### When YouTube changes something
 

@@ -9,10 +9,14 @@ REPO="${VT_REPO:-hamburger101/VivoTube}"
 VERSION=$(sed -n 's/^set(VT_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)
 [ -n "$VERSION" ] || { echo "VT_VERSION not found in CMakeLists.txt" >&2; exit 1; }
 TAG="v$VERSION"
+# Official releases build in VivoTube's own OAuth client from secrets.cmake, so sign-in works
+# without setup. Building one in is a deliberate choice, so it has to be confirmed each time.
 if [ -f secrets.cmake ]; then
-    echo "secrets.cmake is present: its OAuth client would be built into the public release." >&2
-    echo "Move it aside (or set VT_ALLOW_SECRETS=1) and run again." >&2
-    [ "$VT_ALLOW_SECRETS" = "1" ] || exit 1
+    echo "secrets.cmake is present: its OAuth client will be built into the public release." >&2
+    [ "$VT_ALLOW_SECRETS" = "1" ] || { echo "Set VT_ALLOW_SECRETS=1 if that is intended." >&2; exit 1; }
+else
+    echo "No secrets.cmake: this release will have no built-in sign-in." >&2
+    [ "$VT_NO_CLIENT" = "1" ] || { echo "Set VT_NO_CLIENT=1 if that is intended." >&2; exit 1; }
 fi
 sh tools/build_vita.sh
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then

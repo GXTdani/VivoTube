@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VivoTube Privacy Policy</title>
+<meta name="description" content="How VivoTube handles your information.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a class="name" href="./">VivoTube</a>
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="terms.html">Terms of Service</a>
+    <a href="https://github.com/hamburger101/VivoTube">Source code</a>
+  </nav>
+</header>
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: November 10, 2026</p>
+
+  <p>This policy explains what information VivoTube, an unofficial YouTube client for the PlayStation Vita,
+  accesses, stores and shares. It covers the VivoTube app and this website. VivoTube is not made by, endorsed
+  by, or connected to YouTube or Google.</p>
+
+  <div class="summary">
+    <p><strong>In short:</strong></p>
+    <ul>
+      <li>VivoTube has no servers of its own. Its developer never receives your personal information.</li>
+      <li>Everything VivoTube saves stays on your Vita's memory card.</li>
+      <li>VivoTube connects only to Google and YouTube (to show and play videos, and for your account if you sign
+        in) and to GitHub (to check for updates).</li>
+      <li>There are no ads, analytics, tracking or cookies.</li>
+    </ul>
+  </div>
+
+  <h2>VivoTube uses YouTube API Services</h2>
+  <p>VivoTube uses the YouTube API Services, and it uses YouTube's own services to search, browse and play videos.
+  Information that reaches Google or YouTube is handled under the
+  <a href="http://www.google.com/policies/privacy">Google Privacy Policy</a>. By using VivoTube you also agree to
+  the <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>; see VivoTube's
+  <a href="terms.html">Terms of Service</a>.</p>
+
+  <h2>If you sign in with Google</h2>
+  <p>Signing in is optional. If you sign in, you give VivoTube permission, through Google, to manage your YouTube
+  account. VivoTube uses that permission only for these things:</p>
+  <ul>
+    <li><strong>Reads</strong> your channel's name, handle and profile picture, to show who is signed in.</li>
+    <li><strong>Reads</strong> your subscriptions, your playlists and the videos in them, and your liked videos,
+      to show them in the app and keep the app's library in sync.</li>
+    <li><strong>Reads</strong> your rating (like or dislike) of a video when you open it.</li>
+    <li><strong>Changes</strong> your account only when you choose to: subscribing to or unsubscribing from a
+      channel, liking, disliking or removing a rating from a video, and adding a video to one of your playlists.</li>
+    <li>Once per session, sends your sign-in to YouTube to ask for your personalised Home feed.</li>
+  </ul>
+  <p>Sign-in uses an OAuth client that VivoTube's developer registered with Google, unless you set up your own. Your
+  sign-in goes directly between your Vita and Google; it never passes through the developer. Google shows the
+  developer only totals, such as how many accounts have signed in and how many requests VivoTube made, not who you
+  are or what you did.</p>
+  <p>VivoTube doesn't upload videos, post comments, read your email address, or use your Google account for
+  anything beyond YouTube. Google account information goes only between your Vita and Google. It isn't sold,
+  isn't used for advertising, and isn't transferred to anyone else. VivoTube's use of information received from
+  Google APIs follows the
+  <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data
+  Policy</a>, including its Limited Use requirements.</p>
+
+  <h2>What VivoTube stores on your Vita</h2>
+  <p>VivoTube saves its files in <code>ux0:data/VivoTube/</code> on your memory card. They're ordinary files:
+  anyone who can open your memory card can read them. Nothing in this folder is uploaded anywhere.</p>
+  <ul>
+    <li><strong>Your sign-in</strong> (<code>account.json</code>): the token Google issued to VivoTube, plus your
+      channel's name, handle and picture address.</li>
+    <li><strong>Your library</strong>: watch history and where you stopped in each video, search history,
+      subscriptions, likes and dislikes, Watch later, playlists, and hidden recommendations.</li>
+    <li><strong>Your settings</strong>, such as language, location, captions and playback options.</li>
+    <li><strong>Your own Google OAuth client</strong> (<code>google_client.json</code>), only if you set one up
+      instead of the built-in one.</li>
+    <li><strong>A log</strong> (<code>log.txt</code>) of what the app did during the last session, used to
+      diagnose problems. It can include video IDs and error messages. It stays on your Vita unless you choose to
+      share it, for example in a bug report.</li>
+    <li><strong>An update package</strong>, only if an update downloads but can't be installed, so you can install
+      it by hand.</li>
+  </ul>
+
+  <h2>Who VivoTube talks to</h2>
+  <h3>Google and YouTube</h3>
+  <p>To work, VivoTube sends requests from your Vita to YouTube and Google: the searches you type, the videos,
+  channels and pages you open, your subscriptions' upload feeds, and requests for pictures and video streams. If
+  you're signed in, requests about your account carry your sign-in. Like any website you visit, Google and YouTube
+  see your IP address. YouTube also gives VivoTube a temporary visitor identifier, which VivoTube keeps in memory
+  only and forgets when it closes. The <a href="http://www.google.com/policies/privacy">Google Privacy Policy</a>
+  describes how Google handles this.</p>
+  <h3>GitHub</h3>
+  <p>When it starts, VivoTube asks GitHub for the latest VivoTube release, and it downloads the release from GitHub
+  if you choose to update. GitHub sees your IP address, as described in the
+  <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub
+  Privacy Statement</a>.</p>
+  <h3>No one else</h3>
+  <p>VivoTube has no analytics, crash reporting, advertising or tracking of any kind, and it doesn't let any other
+  party show content or ads in the app. VivoTube shows videos, pictures and text from YouTube. It doesn't use
+  cookies, and it doesn't read anything on your Vita other than its own files.</p>
+
+  <h2>This website</h2>
+  <p>This website is hosted by GitHub Pages. It has no cookies, analytics or third-party scripts. GitHub may keep
+  server logs, including your IP address, as described in the GitHub Privacy Statement.</p>
+
+  <h2>Removing your information</h2>
+  <ul>
+    <li><strong>Sign out</strong> in VivoTube (Sign out in the side menu, or your account picture at the top right). VivoTube asks
+      Google to cancel its access and deletes the saved sign-in from your Vita.</li>
+    <li><strong>Revoke access from Google</strong> at any time, even without your Vita: open the
+      <a href="https://security.google.com/settings/security/permissions">Google security settings page</a> and
+      remove VivoTube's access.</li>
+    <li><strong>Clear history</strong> in VivoTube's Settings, under History &amp; privacy.</li>
+    <li><strong>Delete everything</strong> by deleting the <code>ux0:data/VivoTube</code> folder, for example with
+      VitaShell.</li>
+  </ul>
+  <p>Signing out or deleting files on your Vita doesn't change anything on your YouTube account, such as your
+  subscriptions, likes or YouTube's own watch history. Manage those on YouTube.</p>
+
+  <h2>Children</h2>
+  <p>VivoTube isn't directed at children. Using YouTube is subject to the age requirements in the
+  <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>If VivoTube starts handling information differently, this page will be updated before that version is
+  released, and the date at the top will change. Earlier versions are in the
+  <a href="https://github.com/hamburger101/VivoTube/commits/main/docs/privacy.html">project's history</a>.</p>
+
+  <h2>Contact</h2>
+  <p>For questions or complaints about VivoTube's privacy practices, open an issue on
+  <a href="https://github.com/hamburger101/VivoTube/issues">GitHub</a>.</p>
+</main>
+<footer>
+  <nav>
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="terms.html">Terms of Service</a>
+    <a href="https://github.com/hamburger101/VivoTube">Source code</a>
+  </nav>
+  <p>VivoTube is not affiliated with, endorsed by, or connected to YouTube or Google. YouTube is a trademark of
+  Google LLC.</p>
+</footer>
+</body>
+</html>
