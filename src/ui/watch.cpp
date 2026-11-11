@@ -73,6 +73,7 @@ public:
         desc_.list.focused = false;
         capsOn_ = g_app->store.settings.captions;
         lastInteract_ = monotonic_seconds();
+full_ = true;
         load();
     }
 
