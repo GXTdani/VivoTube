@@ -48,6 +48,8 @@ target_link_libraries(VivoTube
   freetype
   png16
   curl
+  ssl
+  crypto
   mbedtls
   mbedx509
   mbedcrypto
